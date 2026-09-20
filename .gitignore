@@ -1,0 +1,92 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build outputs
+dist/
+build/
+coverage/
+
+# Databases & local data stores
+*.db
+*.sqlite
+*.sqlite3
+*.db-shm
+*.db-wal
+*.sql
+data/
+database/
+data/snippets/
+
+# Audio snippet files, bookmarks & user media
+bookmarks/
+snippets/
+installation_date.json
+.installation_date.json
+.deleted_tombstones.json
+*.mp3
+*.m4b
+*.m4a
+*.wav
+*.flac
+*.ogg
+*.aac
+
+# Secrets, tokens & environment variables
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+*.cert
+*token*
+*secret*
+secrets/
+credentials*
+.dev.env.json
+.dev.pid
+
+# Python runtime & cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+env/
+ENV/
+.mypy_cache/
+.ruff_cache/
+
+# AI speech models & cache
+.cache/
+models/
+whisper-models/
+vosk-models/
+huggingface/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS & Editor files
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+ehthumbs.db
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+*.swp
+*.swo
+*~

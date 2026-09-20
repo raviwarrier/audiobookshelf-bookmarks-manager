@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1000" fill="none">
+  <!-- Audiobookshelf Bookmarks Manager Logo - Dark Mode (White Graphic) -->
+  <!-- Bookmark Ribbon -->
+  <polygon points="664,0 822,0 822,305 743,220 664,305" fill="#ffffff" />
+
+  <!-- Headphone Headband -->
+  <path d="M 235,460 C 235,215 350,90 500,90 C 650,90 765,215 765,460" fill="none" stroke="#ffffff" stroke-width="64" stroke-linecap="round" stroke-linejoin="round" />
+
+  <!-- Earcups -->
+  <rect x="178" y="390" width="128" height="258" rx="64" fill="#ffffff" />
+  <rect x="694" y="390" width="128" height="258" rx="64" fill="#ffffff" />
+
+  <!-- Bookshelf Platform -->
+  <rect x="238" y="795" width="524" height="52" rx="26" fill="#ffffff" />
+
+  <!-- Three Vertical Books on the shelf -->
+  <rect x="324" y="322" width="106" height="458" rx="16" fill="#ffffff" />
+  <rect x="447" y="322" width="106" height="458" rx="16" fill="#ffffff" />
+  <rect x="570" y="322" width="106" height="458" rx="16" fill="#ffffff" />
+</svg>

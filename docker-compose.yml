@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  abs-snippet-sidecar:
+    build: .
+    container_name: abs-snippet-sidecar
+    restart: unless-stopped
+    environment:
+      - ABS_TARGET_SERVER=${ABS_TARGET_SERVER:-http://audiobookshelf:80}
+      - ABS_SERVER_URL=${ABS_TARGET_SERVER:-http://audiobookshelf:80}
+      - VOLUME_DIR=/data
+      - WHISPER_MODEL=${WHISPER_MODEL:-base.en}
+      - WHISPER_DEVICE=${WHISPER_DEVICE:-cpu}
+      - VOSK_MODEL_NAME=vosk-model-small-en-us-0.15
+      - PORT=${SIDECAR_PORT:-13380}
+    volumes:
+      # Read-only mount of audiobooks library
+      - ${AUDIOBOOKS_PATH:-/path/to/your/audiobooks}:/audiobooks:ro
+      # Output bookmarks mount (where clips and transcripts are saved)
+      - ${VOLUME_DIR:-./bookmarks}:/data
+    ports:
+      - "${SIDECAR_PORT:-13380}:13380"

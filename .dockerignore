@@ -1,0 +1,85 @@
+# Git
+.git
+.gitignore
+
+# Documentation
+README.md
+
+# Dependencies & build
+node_modules
+dist
+build
+coverage
+
+# Databases & local data
+*.db
+*.sqlite
+*.sqlite3
+*.db-shm
+*.db-wal
+*.sql
+data/
+database/
+data/snippets/
+bookmarks/
+snippets/
+*.mp3
+*.m4b
+*.m4a
+*.wav
+*.flac
+*.ogg
+*.aac
+
+# Secrets & tokens
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+*.cert
+*token*
+*secret*
+secrets/
+credentials*
+.dev.env.json
+.dev.pid
+
+# Python cache & venv
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache
+.coverage
+htmlcov
+.venv
+venv
+env
+ENV
+.mypy_cache
+.ruff_cache
+
+# AI models cache
+.cache
+models
+whisper-models
+vosk-models
+huggingface
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS & Editor
+.DS_Store
+Thumbs.db
+.vscode
+.idea
+*.swp
+*.swo
+*~

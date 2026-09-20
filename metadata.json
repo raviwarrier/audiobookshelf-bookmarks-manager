@@ -1,0 +1,8 @@
+{
+  "name": "Audiobookshelf Bookmarks Manager",
+  "description": "Autonomous manager, real-time listener, and automated bookmark audio clipper & transcriber for Audiobookshelf.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

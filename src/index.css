@@ -1,0 +1,9 @@
+@import "tailwindcss";
+
+@layer base {
+  html, body {
+    font-family: 'JetBrains Mono', monospace, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    background-color: #050505;
+    color: #e5e5e5;
+  }
+}

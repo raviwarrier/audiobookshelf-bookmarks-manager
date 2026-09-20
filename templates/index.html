@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Audiobookshelf Bookmarks Manager</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    body {
+      font-family: 'Plus Jakarta Sans', sans-serif;
+    }
+    code, pre {
+      font-family: 'JetBrains Mono', monospace;
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen antialiased selection:bg-amber-500 selection:text-slate-950">
+
+  <!-- Navigation Bar -->
+  <header class="border-b border-slate-800/80 bg-slate-900/90 backdrop-blur sticky top-0 z-40">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="w-9 h-9 rounded-lg bg-gradient-to-br from-amber-500 to-amber-600 flex items-center justify-center text-slate-950 font-bold shadow-md shadow-amber-500/20">
+          <svg class="w-5 h-5 text-slate-950" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+          </svg>
+        </div>
+        <div>
+          <div class="flex items-center gap-2">
+            <span class="font-bold tracking-tight text-slate-100 text-lg">Audiobookshelf</span>
+            <span class="text-xs px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 font-medium">Bookmarks Backend</span>
+          </div>
+          <p class="text-xs text-slate-400 mt-0.5">Backend app for the bookmarks you create on ABS Mobile app.</p>
+        </div>
+      </div>
+
+      {% if user %}
+      <div class="flex items-center gap-3">
+        <div class="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-800/80 border border-slate-700/60 text-xs">
+          <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+          <span class="text-slate-400">User:</span>
+          <span class="font-semibold text-slate-200">{{ user.username }}</span>
+        </div>
+        <a href="/logout" class="text-xs text-slate-400 hover:text-slate-200 px-2.5 py-1.5 rounded border border-slate-800 hover:border-slate-700 transition-colors">
+          Disconnect
+        </a>
+      </div>
+      {% endif %}
+    </div>
+  </header>
+
+  <main class="max-w-6xl mx-auto px-4 sm:px-6 py-8">
+
+    {% if not user %}
+    <!-- Unauthenticated Login Card -->
+    <div class="max-w-md mx-auto my-12 p-6 sm:p-8 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-xl">
+      <div class="w-12 h-12 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400 mb-5">
+        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+        </svg>
+      </div>
+
+      <h2 class="text-xl font-bold text-slate-100 tracking-tight">Connect with Audiobookshelf</h2>
+      <p class="text-sm text-slate-400 mt-2">
+        Enter your Audiobookshelf API Bearer token to view your captured audiobook snippets, transcripts, and audio clips.
+      </p>
+
+      {% if error %}
+      <div class="mt-4 p-3 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs flex items-start gap-2">
+        <svg class="w-4 h-4 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+        <span>{{ error }}</span>
+      </div>
+      {% endif %}
+
+      <form action="/" method="GET" class="mt-6 space-y-4">
+        <div>
+          <label for="token" class="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">ABS Bearer Token</label>
+          <input 
+            type="password" 
+            id="token" 
+            name="token" 
+            placeholder="Paste your Audiobookshelf API token" 
+            required 
+            class="w-full px-3.5 py-2.5 rounded-lg bg-slate-950 border border-slate-700 text-slate-100 placeholder-slate-500 text-sm focus:outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 font-mono"
+          />
+        </div>
+
+        <button 
+          type="submit" 
+          class="w-full py-2.5 px-4 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold text-sm transition-all shadow-md shadow-amber-500/20 hover:shadow-amber-500/30 flex items-center justify-center gap-2"
+        >
+          <span>Connect to Server</span>
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3" />
+          </svg>
+        </button>
+      </form>
+
+      <div class="mt-6 pt-5 border-t border-slate-800 text-xs text-slate-500 space-y-2">
+        <p class="font-medium text-slate-400">Where to find your token:</p>
+        <ol class="list-decimal list-inside space-y-1 pl-1">
+          <li>Audiobookshelf Web UI &rarr; Settings &rarr; Users</li>
+          <li>Click on your user &rarr; Generate or copy API Token</li>
+          <li>Or inspect any API request header in DevTools Network tab</li>
+        </ol>
+      </div>
+    </div>
+
+    {% else %}
+    <!-- Authenticated Dashboard -->
+    <div class="space-y-6">
+
+      <!-- Action & Status Bar -->
+      <div class="p-5 rounded-2xl bg-slate-900 border border-slate-800 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 shadow-sm">
+        <div>
+          <h1 class="text-2xl font-bold tracking-tight text-slate-100">Audiobook Snippets</h1>
+          <p class="text-xs sm:text-sm text-slate-400 mt-1">
+            Audio clips and automated Whisper transcriptions saved from your listening sessions.
+          </p>
+        </div>
+
+        <div class="flex flex-wrap items-center gap-3 w-full md:w-auto">
+          <!-- Trigger Snippet Form -->
+          <form id="snippet-form" class="flex items-center gap-2 w-full sm:w-auto">
+            <input type="hidden" id="auth-token" value="{{ token }}" />
+            <select id="snippet-duration" class="bg-slate-950 border border-slate-700 text-slate-200 text-xs rounded-lg px-2.5 py-2 focus:outline-none focus:border-amber-500">
+              <option value="30">30 seconds</option>
+              <option value="60" selected>60 seconds</option>
+              <option value="90">90 seconds</option>
+              <option value="120">120 seconds</option>
+            </select>
+            <button 
+              type="button" 
+              onclick="triggerSnippet()" 
+              id="capture-btn"
+              class="px-4 py-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold text-xs transition-colors flex items-center gap-1.5 shadow-sm shadow-amber-500/20"
+            >
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 100-6 3 3 0 000 6z" />
+              </svg>
+              <span>Capture Active Snippet</span>
+            </button>
+          </form>
+        </div>
+      </div>
+
+      <!-- Live status message banner -->
+      <div id="status-banner" class="hidden p-3 rounded-lg text-xs flex items-center justify-between"></div>
+
+      <!-- Stats / Snippets Overview -->
+      <div class="flex items-center justify-between text-xs text-slate-400 px-1">
+        <span>Showing <strong class="text-slate-200">{{ snippets|length }}</strong> snippets for <strong>{{ user.username }}</strong></span>
+        <span>ABS Server: <code class="text-slate-300 font-mono">{{ abs_server_url }}</code></span>
+      </div>
+
+      {% if snippets|length == 0 %}
+      <!-- Empty State -->
+      <div class="text-center py-16 px-4 rounded-2xl bg-slate-900/40 border border-slate-800/80">
+        <div class="w-14 h-14 rounded-full bg-slate-800 flex items-center justify-center mx-auto text-slate-400 mb-4">
+          <svg class="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+          </svg>
+        </div>
+        <h3 class="text-base font-semibold text-slate-200">No snippets captured yet</h3>
+        <p class="text-xs text-slate-400 max-w-md mx-auto mt-1.5">
+          Start listening to an audiobook in Audiobookshelf, then click "Capture Active Snippet" above or send a POST request to <code class="text-amber-400 font-mono">/api/snippet</code>.
+        </p>
+      </div>
+
+      {% else %}
+      <!-- Snippets Feed -->
+      <div class="space-y-5">
+        {% for snippet in snippets %}
+        <div class="p-5 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-sm hover:border-slate-700/80 transition-all space-y-4">
+          
+          <!-- Snippet Header -->
+          <div class="flex flex-col sm:flex-row sm:items-start justify-between gap-2">
+            <div>
+              <div class="flex flex-wrap items-center gap-2 mb-1">
+                <h3 class="font-bold text-slate-100 text-base tracking-tight">{{ snippet.title }}</h3>
+                {% if snippet.chapter %}
+                <span class="px-2 py-0.5 rounded text-[11px] font-medium bg-slate-800 text-slate-300 border border-slate-700">
+                  {{ snippet.chapter }}
+                </span>
+                {% endif %}
+              </div>
+              <p class="text-xs text-slate-400">
+                by <span class="text-slate-200 font-medium">{{ snippet.author }}</span>
+                &bull; {{ snippet.created_at_str }}
+                {% if snippet.duration %}
+                &bull; <span class="text-amber-400 font-mono">{{ snippet.duration }}s clip</span>
+                {% endif %}
+              </p>
+            </div>
+
+            <!-- Action buttons: Download mp3 & md -->
+            <div class="flex items-center gap-2 self-start">
+              {% if snippet.audio_url %}
+              <a 
+                href="{{ snippet.audio_url }}" 
+                download 
+                class="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium border border-slate-700 transition-colors flex items-center gap-1"
+                title="Download MP3 Clip"
+              >
+                <svg class="w-3.5 h-3.5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                </svg>
+                <span>MP3</span>
+              </a>
+              {% endif %}
+
+              {% if snippet.md_url %}
+              <a 
+                href="{{ snippet.md_url }}" 
+                download 
+                class="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium border border-slate-700 transition-colors flex items-center gap-1"
+                title="Download Markdown Transcript"
+              >
+                <svg class="w-3.5 h-3.5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                <span>MD</span>
+              </a>
+              {% endif %}
+            </div>
+          </div>
+
+          <!-- HTML5 Embedded Audio Player -->
+          {% if snippet.audio_url %}
+          <div class="bg-slate-950 p-2.5 rounded-xl border border-slate-800/80 flex items-center">
+            <audio controls preload="none" class="w-full h-9 rounded outline-none">
+              <source src="{{ snippet.audio_url }}" type="audio/mpeg">
+              Your browser does not support the audio element.
+            </audio>
+          </div>
+          {% endif %}
+
+          <!-- Transcription Content -->
+          <div class="rounded-xl bg-slate-950/70 border border-slate-800/70 p-4 text-xs leading-relaxed text-slate-300">
+            <div class="flex items-center justify-between mb-2 pb-2 border-b border-slate-800/60">
+              <div class="flex items-center gap-1.5 text-slate-400 font-semibold text-[11px] uppercase tracking-wider">
+                <svg class="w-3.5 h-3.5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 100-6 3 3 0 000 6z" />
+                </svg>
+                <span>faster-whisper Transcript</span>
+              </div>
+              <button 
+                onclick="copyText(this, `{{ snippet.transcript | escape }}`)" 
+                class="text-[11px] text-slate-400 hover:text-slate-200 transition-colors flex items-center gap-1"
+              >
+                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                </svg>
+                <span>Copy</span>
+              </button>
+            </div>
+            <p class="whitespace-pre-wrap font-sans text-slate-200 text-sm leading-6 selection:bg-amber-500/20">
+              {{ snippet.transcript if snippet.transcript else "No transcript available." }}
+            </p>
+          </div>
+
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+    </div>
+    {% endif %}
+
+  </main>
+
+  <script>
+    async function triggerSnippet() {
+      const btn = document.getElementById('capture-btn');
+      const banner = document.getElementById('status-banner');
+      const token = document.getElementById('auth-token').value;
+      const duration = parseInt(document.getElementById('snippet-duration').value, 10) || 60;
+
+      btn.disabled = true;
+      btn.classList.add('opacity-50', 'cursor-not-allowed');
+      banner.className = 'p-3 rounded-lg text-xs flex items-center justify-between bg-amber-500/10 border border-amber-500/20 text-amber-300';
+      banner.innerHTML = '<span>Capturing audio snippet from active session & transcribing with faster-whisper...</span>';
+      banner.classList.remove('hidden');
+
+      try {
+        const res = await fetch('/api/snippet', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + token
+          },
+          body: JSON.stringify({ duration: duration })
+        });
+
+        const data = await res.json();
+        if (res.ok) {
+          banner.className = 'p-3 rounded-lg text-xs flex items-center justify-between bg-emerald-500/10 border border-emerald-500/20 text-emerald-300';
+          banner.innerHTML = '<span>Snippet captured successfully! Reloading...</span>';
+          setTimeout(() => window.location.reload(), 1200);
+        } else {
+          banner.className = 'p-3 rounded-lg text-xs flex items-center justify-between bg-rose-500/10 border border-rose-500/20 text-rose-300';
+          banner.innerHTML = '<span>Error: ' + (data.detail || JSON.stringify(data)) + '</span>';
+          btn.disabled = false;
+          btn.classList.remove('opacity-50', 'cursor-not-allowed');
+        }
+      } catch (err) {
+        banner.className = 'p-3 rounded-lg text-xs flex items-center justify-between bg-rose-500/10 border border-rose-500/20 text-rose-300';
+        banner.innerHTML = '<span>Network error: ' + err.message + '</span>';
+        btn.disabled = false;
+        btn.classList.remove('opacity-50', 'cursor-not-allowed');
+      }
+    }
+
+    function copyText(btn, text) {
+      navigator.clipboard.writeText(text).then(() => {
+        const orig = btn.innerHTML;
+        btn.innerHTML = '<span>Copied!</span>';
+        setTimeout(() => btn.innerHTML = orig, 1500);
+      });
+    }
+  </script>
+</body>
+</html>
