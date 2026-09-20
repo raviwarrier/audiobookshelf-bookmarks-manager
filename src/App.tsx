@@ -47,11 +47,24 @@ export function App() {
   
   // Connection and Authentication State
   const savedInitial = typeof window !== 'undefined' ? getStoredCredentials() : null;
+  const sanitizeInitialServer = (url?: string | null) => {
+    if (!url || typeof url !== 'string') return '';
+    const trimmed = url.trim();
+    return trimmed.includes('abs.example.com') ? '' : trimmed;
+  };
   const [user, setUser] = useState<AbsUser | null>(null);
   const [activeToken, setActiveToken] = useState<string | null>(null);
-  const [serverUrl, setServerUrl] = useState<string>(savedInitial?.serverUrl || 'http://localhost:13378');
+  const [serverUrl, setServerUrl] = useState<string>(
+    sanitizeInitialServer(savedInitial?.serverUrl) || 'http://localhost:13378'
+  );
+  const [defaultServerUrl, setDefaultServerUrl] = useState<string>('');
   const [sidecarUrl, setSidecarUrl] = useState<string>(savedInitial?.sidecarUrl || getDefaultSidecarUrl());
   const [useProxy, setUseProxy] = useState<boolean>(savedInitial?.useProxy !== undefined ? savedInitial.useProxy : true);
+
+  const serverUrlRef = useRef<string>(serverUrl);
+  serverUrlRef.current = serverUrl;
+  const userRef = useRef<AbsUser | null>(user);
+  userRef.current = user;
 
   // Active Listening Session
   const [session, setSession] = useState<AbsActiveSession | null>(null);
@@ -94,6 +107,7 @@ export function App() {
     try {
       const endpoint = `${targetSidecar.replace(/\/+$/, '')}/api/user/bookmarks`;
       let bookmarksList: any[] = [];
+      const currentServer = serverUrlRef.current;
 
       if (proxyEnabled) {
         const res = await fetch('/api/proxy/abs', {
@@ -104,7 +118,7 @@ export function App() {
             method: 'GET',
             headers: {
               'Authorization': `Bearer ${token}`,
-              'X-ABS-Server-Url': serverUrl,
+              'X-ABS-Server-Url': currentServer,
             }
           })
         });
@@ -116,7 +130,7 @@ export function App() {
         const res = await fetch(endpoint, {
           headers: {
             'Authorization': `Bearer ${token}`,
-            'X-ABS-Server-Url': serverUrl,
+            'X-ABS-Server-Url': currentServer,
           }
         });
         if (res.ok) {
@@ -213,13 +227,16 @@ export function App() {
     isMock?: boolean;
     remember?: boolean;
   }) => {
-    setServerUrl(params.serverUrl);
-    setSidecarUrl(params.sidecarUrl);
+    const cleanServerUrl = params.serverUrl.trim();
+    serverUrlRef.current = cleanServerUrl;
+    setServerUrl(cleanServerUrl);
+    setSidecarUrl(params.sidecarUrl.trim());
     setUseProxy(params.useProxy);
 
     if (params.isMock) {
       const mockUser = { id: 'usr_mock', username: 'bookworm_user' };
       setUser(mockUser);
+      userRef.current = mockUser;
       setActiveToken('mock_token_demo');
       setSession({
         libraryItemId: 'li_sample_project_hail_mary',
@@ -236,7 +253,7 @@ export function App() {
     }
 
     const authResult = await authenticateAbs(
-      params.serverUrl,
+      cleanServerUrl,
       params.authMode,
       params.token,
       params.username,
@@ -245,14 +262,15 @@ export function App() {
     );
 
     setUser(authResult.user);
+    userRef.current = authResult.user;
     setActiveToken(authResult.token);
     setIsAuthModalOpen(false);
 
     // Save or clear credentials based on the user's "remember" choice
     if (params.remember) {
       saveStoredCredentials({
-        serverUrl: params.serverUrl,
-        sidecarUrl: params.sidecarUrl,
+        serverUrl: cleanServerUrl,
+        sidecarUrl: params.sidecarUrl.trim(),
         useProxy: params.useProxy,
         authMode: params.authMode,
         token: params.authMode === 'token' ? (params.token || authResult.token) : authResult.token,
@@ -263,8 +281,8 @@ export function App() {
       clearStoredCredentials();
     }
 
-    loadActiveSession(params.serverUrl, authResult.token, params.useProxy);
-    syncUserBookmarks(params.sidecarUrl, authResult.token, authResult.user.username, params.useProxy);
+    loadActiveSession(cleanServerUrl, authResult.token, params.useProxy);
+    syncUserBookmarks(params.sidecarUrl.trim(), authResult.token, authResult.user.username, params.useProxy);
   };
 
   // On App Mount: Auto-login from persistent saved credentials if available
@@ -280,10 +298,12 @@ export function App() {
         const res = await fetch('/api/config');
         const cfg = await res.json();
         if (cfg?.ok) {
-          if (cfg.defaultAbsUrl) {
-            initialServer = cfg.defaultAbsUrl;
-          } else if (cfg.absTargetServer && cfg.absTargetServer !== 'http://audiobookshelf:80') {
-            initialServer = cfg.absTargetServer;
+          const cfgDefault = cfg.defaultAbsUrl && !cfg.defaultAbsUrl.includes('abs.example.com') ? cfg.defaultAbsUrl : '';
+          const cfgTarget = cfg.absTargetServer && cfg.absTargetServer !== 'http://audiobookshelf:80' && !cfg.absTargetServer.includes('abs.example.com') ? cfg.absTargetServer : '';
+          const detected = cfgDefault || cfgTarget;
+          if (detected) {
+            initialServer = detected;
+            setDefaultServerUrl(detected);
           }
           if (cfg.sidecarUrl) {
             initialSidecar = cfg.sidecarUrl;
@@ -296,18 +316,20 @@ export function App() {
         console.warn('Could not load /api/config, falling back to defaults:', err);
       }
 
-      if (isCancelled) return;
+      if (isCancelled || userRef.current) return;
 
       // 2. Check if user previously saved credentials on this device
       const saved = getStoredCredentials();
+      const savedServer = saved?.serverUrl && !saved.serverUrl.includes('abs.example.com') ? saved.serverUrl : '';
       if (saved && (saved.token || (saved.username && saved.password))) {
         try {
-          const targetServerToUse = saved.serverUrl || initialServer;
+          const targetServerToUse = savedServer || initialServer;
           const targetSidecarToUse = saved.sidecarUrl || initialSidecar;
           const proxyToUse = saved.useProxy !== undefined ? saved.useProxy : initialProxy;
           const authModeToUse = saved.token ? 'token' : saved.authMode;
 
           setServerUrl(targetServerToUse);
+          serverUrlRef.current = targetServerToUse;
           setSidecarUrl(targetSidecarToUse);
           setUseProxy(proxyToUse);
 
@@ -323,6 +345,7 @@ export function App() {
           if (isCancelled) return;
 
           setUser(authResult.user);
+          userRef.current = authResult.user;
           setActiveToken(authResult.token);
           setIsAuthModalOpen(false);
 
@@ -330,14 +353,14 @@ export function App() {
           syncUserBookmarks(targetSidecarToUse, authResult.token, authResult.user.username, proxyToUse);
         } catch (autoErr) {
           console.warn('Auto-reconnect with saved credentials notice:', autoErr);
-          if (!isCancelled) {
+          if (!isCancelled && !userRef.current) {
             setIsAuthModalOpen(true);
           }
         }
       } else {
-        if (!isCancelled) {
-          setServerUrl(initialServer);
-          setSidecarUrl(initialSidecar);
+        if (!isCancelled && !userRef.current) {
+          setServerUrl((prev) => (!prev || prev === 'http://localhost:13378' || prev.includes('abs.example.com') ? initialServer : prev));
+          setSidecarUrl((prev) => (prev.includes('[your ip:port') ? initialSidecar : prev));
           setUseProxy(initialProxy);
           setIsAuthModalOpen(true);
         }
@@ -538,12 +561,25 @@ export function App() {
     }
   };
 
-  const handleDeleteSnippet = async (id: string) => {
+  const handleDeleteSnippet = async (id: string, snippetToDelete?: Snippet) => {
+    // Find snippet metadata before removal to pass rich tombstone identifiers
+    const target = snippetToDelete || snippets.find((s) => s.id === id);
     setSnippets((prev) => prev.filter((s) => s.id !== id));
 
     if (activeToken && sidecarUrl) {
       try {
-        const endpoint = `${sidecarUrl.replace(/\/+$/, '')}/api/user/bookmarks/${encodeURIComponent(id)}`;
+        const queryParams = new URLSearchParams();
+        if (target?.libraryItemId) queryParams.set('library_item_id', target.libraryItemId);
+        if (typeof target?.currentTime === 'number') queryParams.set('time', String(target.currentTime));
+        else if (typeof target?.startTime === 'number') queryParams.set('time', String(target.startTime));
+        if (typeof target?.startTime === 'number') queryParams.set('start_time', String(target.startTime));
+        if (target?.bookTitle) queryParams.set('book_title', target.bookTitle);
+        if (target?.timestamp) queryParams.set('timestamp', target.timestamp);
+        if (target?.createdAt) queryParams.set('created_at', String(target.createdAt));
+
+        const qs = queryParams.toString() ? `?${queryParams.toString()}` : '';
+        const endpoint = `${sidecarUrl.replace(/\/+$/, '')}/api/user/bookmarks/${encodeURIComponent(id)}${qs}`;
+
         if (useProxy) {
           await fetch('/api/proxy/abs', {
             method: 'POST',
@@ -675,6 +711,7 @@ export function App() {
         onClose={() => setIsAuthModalOpen(false)}
         user={user}
         currentServerUrl={serverUrl}
+        defaultServerUrl={defaultServerUrl}
         currentSidecarUrl={sidecarUrl}
         currentUseProxy={useProxy}
         onConnect={handleConnect}

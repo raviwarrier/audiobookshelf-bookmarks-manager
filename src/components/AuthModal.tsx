@@ -6,13 +6,10 @@ import {
   AlertCircle, 
   Lock,
   Radio,
-  LogOut,
-  Globe,
-  Pencil,
-  Check
+  LogOut
 } from 'lucide-react';
 import { AbsUser } from '../types';
-import { isIpPortUrl, getStoredCredentials } from '../lib/authStorage';
+import { getStoredCredentials } from '../lib/authStorage';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -54,12 +51,20 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     ? `http://${clientHost}:13380`
     : 'http://localhost:13380';
 
-  const savedInitial = typeof window !== 'undefined' ? getStoredCredentials() : null;
+  const sanitizeUrl = (url?: string | null) => {
+    if (!url || typeof url !== 'string') return '';
+    const trimmed = url.trim();
+    return trimmed.includes('abs.example.com') ? '' : trimmed;
+  };
 
-  const [serverUrl, setServerUrl] = useState(
-    savedInitial?.serverUrl || currentServerUrl || defaultServerUrl || 'http://localhost:13378'
-  );
-  const [isEditingPublicUrl, setIsEditingPublicUrl] = useState(false);
+  const savedInitial = typeof window !== 'undefined' ? getStoredCredentials() : null;
+  const initialServerCandidate =
+    sanitizeUrl(savedInitial?.serverUrl) ||
+    sanitizeUrl(currentServerUrl) ||
+    sanitizeUrl(defaultServerUrl) ||
+    'http://localhost:13378';
+
+  const [serverUrl, setServerUrl] = useState(initialServerCandidate);
   const [rememberCredentials, setRememberCredentials] = useState(savedInitial?.remember ?? true);
   const [sidecarUrl, setSidecarUrl] = useState(
     savedInitial?.sidecarUrl || (currentSidecarUrl && !currentSidecarUrl.includes('[your ip:port') ? currentSidecarUrl : defaultLocalSidecar)
@@ -77,8 +82,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   useEffect(() => {
     if (!isOpen) return;
     const saved = getStoredCredentials();
+    const candidate =
+      sanitizeUrl(saved?.serverUrl) ||
+      sanitizeUrl(currentServerUrl) ||
+      sanitizeUrl(defaultServerUrl) ||
+      'http://localhost:13378';
+
     if (saved) {
-      if (saved.serverUrl) setServerUrl(saved.serverUrl);
+      if (candidate) setServerUrl(candidate);
       if (saved.sidecarUrl) setSidecarUrl(saved.sidecarUrl);
       if (saved.useProxy !== undefined) setUseProxy(saved.useProxy);
       if (saved.authMode) setAuthMode(saved.authMode);
@@ -86,8 +97,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       if (saved.username) setUsername(saved.username);
       setRememberCredentials(saved.remember ?? true);
     } else {
-      const initial = currentServerUrl || defaultServerUrl || 'http://localhost:13378';
-      setServerUrl(initial);
+      setServerUrl(candidate);
       if (!currentSidecarUrl || currentSidecarUrl.includes('[your ip:port')) {
         setSidecarUrl(defaultLocalSidecar);
       } else {
@@ -96,7 +106,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       setUseProxy(currentUseProxy);
     }
     setErrorMsg(null);
-  }, [isOpen, currentServerUrl, defaultServerUrl, currentSidecarUrl, currentUseProxy, defaultLocalSidecar]);
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -213,71 +223,34 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           
           {/* Server URL */}
           <div>
-            <div className="flex items-center justify-between mb-1">
+            <div className="flex items-center justify-between mb-1.5">
               <label className="block text-xs font-medium text-neutral-300">
                 Audiobookshelf Server URL
               </label>
-              <div className="flex items-center gap-2 text-[10px]">
-                {defaultServerUrl && defaultServerUrl !== serverUrl && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setServerUrl(defaultServerUrl);
-                      setIsEditingPublicUrl(false);
-                    }}
-                    className="text-neutral-400 hover:text-white underline cursor-pointer"
-                  >
-                    Reset to Default ({defaultServerUrl.replace(/^https?:\/\//, '')})
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {/* If URL looks like an IP:port or user clicked Edit, show editable textbox; otherwise show verified label with Edit button */}
-            {isIpPortUrl(serverUrl) || isEditingPublicUrl ? (
-              <div className="space-y-1.5">
-                <div className="relative flex items-center">
-                  <input
-                    type="url"
-                    required
-                    value={serverUrl}
-                    onChange={(e) => setServerUrl(e.target.value)}
-                    placeholder="https://abs.example.com or http://localhost:13378"
-                    className="w-full bg-[#181818] border border-neutral-700 hover:border-neutral-500 focus:border-neutral-300 focus:bg-[#202020] text-white px-3 py-2 text-xs focus:outline-none transition-colors font-mono pr-20"
-                  />
-                  {!isIpPortUrl(serverUrl) && isEditingPublicUrl && (
-                    <button
-                      type="button"
-                      onClick={() => setIsEditingPublicUrl(false)}
-                      className="absolute right-1.5 px-2 py-1 bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-[10px] font-medium border border-neutral-600 flex items-center gap-1"
-                    >
-                      <Check className="w-3 h-3 text-emerald-400" />
-                      <span>Lock</span>
-                    </button>
-                  )}
-                </div>
-              </div>
-            ) : (
-              <div className="flex items-center justify-between p-2.5 bg-[#141414] border border-neutral-700">
-                <div className="flex items-center gap-2 min-w-0">
-                  <Globe className="w-4 h-4 text-emerald-400 shrink-0" />
-                  <span className="text-white text-xs font-mono font-medium truncate">
-                    {serverUrl}
-                  </span>
-                  <span className="text-[10px] bg-emerald-950/80 text-emerald-300 border border-emerald-800 px-1.5 py-0.2 shrink-0 font-sans">
-                    Configured Server
-                  </span>
-                </div>
+              {defaultServerUrl && defaultServerUrl !== serverUrl && !defaultServerUrl.includes('abs.example.com') && (
                 <button
                   type="button"
-                  onClick={() => setIsEditingPublicUrl(true)}
-                  className="text-xs text-neutral-300 hover:text-white px-2.5 py-1 border border-neutral-700 hover:border-neutral-500 bg-[#1e1e1e] flex items-center gap-1.5 shrink-0 ml-3 transition-colors cursor-pointer"
+                  onClick={() => setServerUrl(defaultServerUrl)}
+                  className="text-[10px] text-neutral-400 hover:text-white underline cursor-pointer"
                 >
-                  <Pencil className="w-3 h-3" />
-                  <span>Edit URL</span>
+                  Reset to Server Default ({defaultServerUrl.replace(/^https?:\/\//, '')})
                 </button>
-              </div>
-            )}
+              )}
+            </div>
+
+            <div className="relative flex items-center">
+              <input
+                type="url"
+                required
+                value={serverUrl}
+                onChange={(e) => setServerUrl(e.target.value)}
+                placeholder="http://192.168.1.100:13378 or https://audiobooks.yourdomain.com"
+                className="w-full bg-[#181818] border border-neutral-700 hover:border-neutral-500 focus:border-neutral-300 focus:bg-[#202020] text-white px-3 py-2 text-xs focus:outline-none transition-colors font-mono"
+              />
+            </div>
+            <p className="mt-1 text-[11px] text-neutral-500">
+              Address of your Audiobookshelf server (e.g. host LAN IP with port 13378 or reverse proxy domain).
+            </p>
           </div>
 
           {/* Auth Mode Select */}

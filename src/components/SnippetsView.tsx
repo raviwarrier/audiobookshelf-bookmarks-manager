@@ -37,7 +37,7 @@ interface SnippetsViewProps {
   syncState?: SyncState | null;
   isTriggeringSync?: boolean;
   onTriggerSync?: () => Promise<void>;
-  onDeleteSnippet: (id: string) => void;
+  onDeleteSnippet: (id: string, snippet?: Snippet) => void;
   onNavigateToCapture: () => void;
   onRefreshSnippets?: () => Promise<void>;
   isLoadingSnippets?: boolean;
@@ -76,7 +76,21 @@ export const SnippetsView: React.FC<SnippetsViewProps> = ({
   const [exportingBook, setExportingBook] = useState<string | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
   const [selectedBookFilter, setSelectedBookFilter] = useState<string | null>(null);
+  const [bookFilterQuery, setBookFilterQuery] = useState<string>('');
+  const [isBookDropdownOpen, setIsBookDropdownOpen] = useState<boolean>(false);
+  const bookDropdownRef = React.useRef<HTMLDivElement>(null);
   const [openExportDropdownId, setOpenExportDropdownId] = useState<string | null>(null);
+
+  // Close book dropdown when clicking outside
+  useEffect(() => {
+    const handleOutsideClick = (e: MouseEvent) => {
+      if (bookDropdownRef.current && !bookDropdownRef.current.contains(e.target as Node)) {
+        setIsBookDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutsideClick);
+    return () => document.removeEventListener('mousedown', handleOutsideClick);
+  }, []);
 
   // Sorting state (by Date or Book, Ascending / Descending)
   const [sortField, setSortField] = useState<'date' | 'book'>('date');
@@ -213,16 +227,36 @@ export const SnippetsView: React.FC<SnippetsViewProps> = ({
     return () => window.removeEventListener('click', handleGlobalClick);
   }, [openExportDropdownId]);
 
-  // Group snippets by unique books
-  const uniqueBooks: string[] = Array.from(new Set(snippets.map((s) => s.bookTitle).filter(Boolean)));
+  // Group snippets by unique books (sorted alphabetically)
+  const uniqueBooks: string[] = (
+    Array.from(new Set(snippets.map((s) => s.bookTitle).filter(Boolean))) as string[]
+  ).sort((a, b) => a.localeCompare(b));
+
+  const activeBookQuery = (selectedBookFilter || bookFilterQuery).trim().toLowerCase();
+
+  const matchingBooks = uniqueBooks.filter((b) =>
+    b.toLowerCase().includes(bookFilterQuery.trim().toLowerCase())
+  );
 
   const filteredSnippets = snippets.filter((s) => {
+    const sBook = (s.bookTitle || '').toLowerCase();
+    const sAuthor = (s.author || '').toLowerCase();
+    const sChapter = (s.chapterName || '').toLowerCase();
+    const sTranscript = (s.transcript || '').toLowerCase();
+
     const matchesSearch =
-      s.bookTitle.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      s.author.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      s.chapterName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      s.transcript.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesBook = !selectedBookFilter || s.bookTitle === selectedBookFilter;
+      !searchTerm ||
+      sBook.includes(searchTerm.toLowerCase()) ||
+      sAuthor.includes(searchTerm.toLowerCase()) ||
+      sChapter.includes(searchTerm.toLowerCase()) ||
+      sTranscript.includes(searchTerm.toLowerCase());
+
+    const matchesBook =
+      !activeBookQuery ||
+      (selectedBookFilter
+        ? sBook === selectedBookFilter.toLowerCase()
+        : sBook.includes(activeBookQuery));
+
     return matchesSearch && matchesBook;
   });
 
@@ -630,37 +664,133 @@ export const SnippetsView: React.FC<SnippetsViewProps> = ({
         </div>
       </div>
 
-      {/* Book Filter Chips (When multiple books exist) */}
-      {uniqueBooks.length > 1 && (
-        <div className="flex flex-wrap items-center gap-2 pt-1 pb-1">
+      {/* Compact Book Filter Bar (Type book name or All Books to clear) */}
+      {uniqueBooks.length > 0 && (
+        <div className="flex flex-wrap items-center gap-3 pt-1 pb-1">
+          {/* All Books Button (Clears filter) */}
           <button
-            onClick={() => setSelectedBookFilter(null)}
-            className={`px-2.5 py-1 text-xs font-mono transition-colors border ${
-              selectedBookFilter === null
-                ? 'bg-neutral-200 text-black border-neutral-200 font-semibold'
-                : 'bg-[#141414] text-neutral-300 border-neutral-700 hover:border-neutral-500'
+            id="snippets-all-books-filter-btn"
+            onClick={() => {
+              setSelectedBookFilter(null);
+              setBookFilterQuery('');
+              setIsBookDropdownOpen(false);
+            }}
+            className={`px-3 py-1.5 text-xs font-mono transition-colors border flex items-center gap-1.5 shrink-0 ${
+              !selectedBookFilter && !bookFilterQuery.trim()
+                ? 'bg-neutral-200 text-black border-neutral-200 font-semibold shadow-sm'
+                : 'bg-[#141414] text-neutral-300 border-neutral-700 hover:border-neutral-500 hover:text-white cursor-pointer'
             }`}
+            title="Show all snippets from all books"
           >
-            All Books ({snippets.length})
+            <span>All Books</span>
+            <span
+              className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${
+                !selectedBookFilter && !bookFilterQuery.trim()
+                  ? 'bg-neutral-300 text-black'
+                  : 'bg-neutral-800 text-neutral-400'
+              }`}
+            >
+              {snippets.length}
+            </span>
           </button>
-          {uniqueBooks.map((bTitle) => {
-            const count = snippets.filter((s) => s.bookTitle === bTitle).length;
-            const isSelected = selectedBookFilter === bTitle;
-            return (
-              <button
-                key={bTitle}
-                onClick={() => setSelectedBookFilter(isSelected ? null : bTitle)}
-                className={`px-2.5 py-1 text-xs font-mono transition-colors border truncate max-w-[260px] ${
-                  isSelected
-                    ? 'bg-neutral-200 text-black border-neutral-200 font-semibold'
-                    : 'bg-[#141414] text-neutral-300 border-neutral-700 hover:border-neutral-500'
+
+          {/* Type Book Name Input & Dropdown */}
+          <div ref={bookDropdownRef} className="relative flex-1 min-w-[220px] max-w-md">
+            <div className="relative flex items-center">
+              <BookOpen className="absolute left-2.5 w-3.5 h-3.5 text-neutral-400 pointer-events-none" />
+              <input
+                id="snippets-book-name-filter-input"
+                type="text"
+                placeholder={
+                  selectedBookFilter
+                    ? `Filtering: ${selectedBookFilter}`
+                    : `Type book name to filter (${uniqueBooks.length} books)...`
+                }
+                value={selectedBookFilter ? selectedBookFilter : bookFilterQuery}
+                onChange={(e) => {
+                  setSelectedBookFilter(null);
+                  setBookFilterQuery(e.target.value);
+                  setIsBookDropdownOpen(true);
+                }}
+                onFocus={() => setIsBookDropdownOpen(true)}
+                className={`w-full bg-[#121212] border text-xs text-white pl-8 pr-8 py-1.5 focus:outline-none transition-colors font-mono ${
+                  selectedBookFilter || bookFilterQuery.trim()
+                    ? 'border-neutral-400 bg-[#171717]'
+                    : 'border-neutral-700 hover:border-neutral-500 focus:border-neutral-400'
                 }`}
-                title={bTitle}
+              />
+              {(selectedBookFilter || bookFilterQuery) && (
+                <button
+                  id="snippets-clear-book-filter-btn"
+                  onClick={() => {
+                    setSelectedBookFilter(null);
+                    setBookFilterQuery('');
+                    setIsBookDropdownOpen(false);
+                  }}
+                  className="absolute right-2 p-0.5 text-neutral-400 hover:text-white hover:bg-neutral-800 rounded transition-colors"
+                  title="Clear book filter"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+
+            {/* Interactive Matching Books Dropdown */}
+            {isBookDropdownOpen && matchingBooks.length > 0 && (
+              <div className="absolute left-0 right-0 top-full mt-1 max-h-60 overflow-y-auto bg-[#141414] border border-neutral-700 shadow-2xl z-50 py-1 font-mono text-xs">
+                <div className="px-3 py-1 text-[10px] uppercase tracking-wider text-neutral-400 border-b border-neutral-800/80 flex justify-between items-center">
+                  <span>Matching Books ({matchingBooks.length})</span>
+                  <span className="text-[10px] text-neutral-500">Click to filter</span>
+                </div>
+                {matchingBooks.map((bTitle) => {
+                  const count = snippets.filter((s) => s.bookTitle === bTitle).length;
+                  const isSelected = selectedBookFilter === bTitle;
+                  return (
+                    <button
+                      key={bTitle}
+                      type="button"
+                      onClick={() => {
+                        setSelectedBookFilter(bTitle);
+                        setBookFilterQuery('');
+                        setIsBookDropdownOpen(false);
+                      }}
+                      className={`w-full text-left px-3 py-1.5 flex items-center justify-between gap-2 border-b border-neutral-800/40 last:border-none transition-colors ${
+                        isSelected
+                          ? 'bg-neutral-800 text-white font-medium'
+                          : 'text-neutral-300 hover:bg-[#202020] hover:text-white'
+                      }`}
+                    >
+                      <span className="truncate">{bTitle}</span>
+                      <span className="text-[10px] text-neutral-400 bg-neutral-800 px-1.5 py-0.5 shrink-0">
+                        {count}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Active Filter Indicator Tag */}
+          {(selectedBookFilter || bookFilterQuery.trim()) && (
+            <div className="flex items-center gap-1.5 text-xs text-neutral-300 font-mono bg-[#181818] border border-neutral-700 px-2.5 py-1">
+              <span className="text-neutral-400 text-[11px]">Filtered:</span>
+              <span className="text-white font-semibold truncate max-w-[200px]">
+                {selectedBookFilter || bookFilterQuery}
+              </span>
+              <button
+                onClick={() => {
+                  setSelectedBookFilter(null);
+                  setBookFilterQuery('');
+                  setIsBookDropdownOpen(false);
+                }}
+                className="ml-1 text-neutral-400 hover:text-white transition-colors"
+                title="Clear filter"
               >
-                {bTitle} ({count})
+                <X className="w-3 h-3" />
               </button>
-            );
-          })}
+            </div>
+          )}
         </div>
       )}
 
@@ -906,9 +1036,10 @@ export const SnippetsView: React.FC<SnippetsViewProps> = ({
 
                   <div className="flex items-center gap-3">
                     <button
-                      onClick={() => onDeleteSnippet(snippet.id)}
+                      id={`snippet-delete-btn-${snippet.id}`}
+                      onClick={() => onDeleteSnippet(snippet.id, snippet)}
                       className="text-neutral-400 hover:text-red-400 flex items-center gap-1 transition-colors"
-                      title="Delete snippet"
+                      title="Delete snippet permanently"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                       <span>Delete</span>

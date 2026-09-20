@@ -62,12 +62,16 @@ if [ -f "$ENV_FILE" ]; then
     done < "$ENV_FILE"
 fi
 
+if [ -n "$EXISTING_ABS_SERVER" ] && [[ "$EXISTING_ABS_SERVER" == *"abs.example.com"* ]]; then
+    EXISTING_ABS_SERVER="http://localhost:13378"
+fi
+
 # 2. Audiobookshelf Target Server URL
 echo -e "${BOLD}1. Audiobookshelf Target Server URL${NC}"
 echo -e "   This is the URL where your existing Audiobookshelf server is running."
 echo -e "   ${YELLOW}Note: 13378 is Audiobookshelf's default port. The manager connects to it, but does not listen on it.${NC}"
-read -rp "   Target ABS URL [$EXISTING_ABS_SERVER]: " INPUT_ABS_SERVER
-ABS_TARGET_SERVER="${INPUT_ABS_SERVER:-$EXISTING_ABS_SERVER}"
+read -rp "   Target ABS URL [${EXISTING_ABS_SERVER:-http://localhost:13378}]: " INPUT_ABS_SERVER
+ABS_TARGET_SERVER="${INPUT_ABS_SERVER:-${EXISTING_ABS_SERVER:-http://localhost:13378}}"
 ABS_TARGET_SERVER="${ABS_TARGET_SERVER%/}"
 
 # 3. Output Bookmarks & Volume Directory
@@ -150,6 +154,7 @@ cat > "$ENV_FILE" <<EOF
 # Upstream Audiobookshelf Server (The sidecar connects to this; does NOT listen on 13378)
 ABS_TARGET_SERVER="$ABS_TARGET_SERVER"
 ABS_SERVER_URL="$ABS_TARGET_SERVER"
+DEFAULT_ABS_URL="$ABS_TARGET_SERVER"
 
 # Storage paths
 VOLUME_DIR="$VOLUME_DIR"
@@ -246,7 +251,14 @@ echo -e "  - Web Dashboard Port:  ${GREEN}$WEB_PORT${NC}"
 echo -e "  - Sidecar Proxy Port:  ${GREEN}$SIDECAR_PORT${NC}"
 echo -e "  - Whisper Model:       ${CYAN}$WHISPER_MODEL${NC}\n"
 
-echo -e "${BOLD}To start the services with PM2:${NC}"
-echo -e "  ${GREEN}pm2 start ecosystem.config.cjs${NC}"
-echo -e "  ${GREEN}pm2 save${NC}\n"
+if command -v pm2 &>/dev/null && pm2 list | grep -q "abs-manager"; then
+    echo -e "${BLUE}[*] Restarting active PM2 processes with updated environment...${NC}"
+    pm2 restart ecosystem.config.cjs --update-env 2>/dev/null || true
+    pm2 save 2>/dev/null || true
+    echo -e "   ${GREEN}✓ PM2 services updated and running.${NC}\n"
+else
+    echo -e "${BOLD}To start the services with PM2:${NC}"
+    echo -e "  ${GREEN}pm2 start ecosystem.config.cjs${NC}"
+    echo -e "  ${GREEN}pm2 save${NC}\n"
+fi
 echo -e "To update everything in the future with one command, run ${BOLD}./update.sh${NC} (or ${BOLD}npm run update${NC}).\n"

@@ -304,46 +304,179 @@ def is_bookmark_after_installation_cutoff(created_at_raw: Any) -> bool:
     return False
 
 # Tombstone tracking for explicitly deleted bookmarks
-def _get_tombstone_file_path() -> str:
-    return os.path.join(VOLUME_DIR, ".deleted_tombstones.json")
+def get_tombstone_file_paths() -> List[str]:
+    """Candidate file locations for persistent tombstone records across updates and re-installs."""
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.path.join(VOLUME_DIR, ".deleted_tombstones.json"),
+        os.path.join(app_dir, ".deleted_tombstones.json"),
+        os.path.join(VOLUME_DIR, "deleted_tombstones.json"),
+        os.path.join(app_dir, "deleted_tombstones.json"),
+    ]
+    try:
+        for c_root in get_candidate_volume_dirs():
+            if c_root:
+                candidates.append(os.path.join(c_root, ".deleted_tombstones.json"))
+                candidates.append(os.path.join(c_root, "deleted_tombstones.json"))
+    except Exception:
+        pass
+    seen = set()
+    result = []
+    for c in candidates:
+        if c and c not in seen:
+            seen.add(c)
+            result.append(c)
+    return result
 
 def load_deleted_tombstones() -> Dict[str, Any]:
-    p = _get_tombstone_file_path()
-    if os.path.isfile(p):
-        try:
-            with open(p, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return {"tombstones": []}
+    """Loads and merges tombstones from all candidate locations."""
+    merged: Dict[str, Dict[str, Any]] = {}
+    for p in get_tombstone_file_paths():
+        if os.path.isfile(p):
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    for item in data.get("tombstones", []):
+                        # Construct a unique key so we merge without duplicating
+                        k = (
+                            item.get("snippet_id") or
+                            f"{item.get('library_item_id')}_{item.get('time')}_{item.get('created_at')}"
+                        )
+                        if k in merged:
+                            merged[k].update({field: val for field, val in item.items() if val is not None})
+                        else:
+                            merged[k] = item
+            except Exception:
+                pass
+    return {"tombstones": list(merged.values())}
 
-def record_deleted_tombstone(snippet_id: str, lib_id: Optional[str] = None, book_time: Optional[float] = None):
+def record_deleted_tombstone(
+    snippet_id: str,
+    lib_id: Optional[str] = None,
+    book_time: Optional[float] = None,
+    start_time: Optional[float] = None,
+    current_time: Optional[float] = None,
+    book_title: Optional[str] = None,
+    title: Optional[str] = None,
+    created_at: Optional[Any] = None,
+    timestamp: Optional[str] = None,
+    bookmark_id: Optional[str] = None
+):
+    """
+    Persistently records a tombstone entry across all volume and application directories
+    so that manual deletions in the web UI are never resurrected on server restarts,
+    re-installs, updates, or background bookmark sync cycles.
+    """
     try:
         data = load_deleted_tombstones()
-        entry = {
-            "snippet_id": snippet_id,
-            "library_item_id": lib_id,
-            "time": book_time,
+        clean_snip = snippet_id.strip().strip("/") if snippet_id else ""
+        resolved_time = current_time if current_time is not None else (book_time if book_time is not None else start_time)
+
+        entry: Dict[str, Any] = {
+            "snippet_id": clean_snip,
+            "bookmark_id": str(bookmark_id).strip() if bookmark_id else None,
+            "library_item_id": str(lib_id).strip() if lib_id and str(lib_id).strip() not in ("N/A", "unknown", "") else None,
+            "time": float(resolved_time) if resolved_time is not None else None,
+            "start_time": float(start_time) if start_time is not None else None,
+            "current_time": float(current_time) if current_time is not None else (float(book_time) if book_time is not None else None),
+            "book_title": str(book_title).strip() if book_title else None,
+            "title": str(title).strip() if title else None,
+            "created_at": created_at,
+            "timestamp": str(timestamp).strip() if timestamp else None,
             "deleted_at": datetime.now().isoformat()
         }
-        data["tombstones"].append(entry)
-        if len(data["tombstones"]) > 500:
-            data["tombstones"] = data["tombstones"][-500:]
-        p = _get_tombstone_file_path()
-        with open(p, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
+
+        # Check if already present in tombstones
+        existing_idx = None
+        for i, itm in enumerate(data["tombstones"]):
+            if clean_snip and itm.get("snippet_id") == clean_snip:
+                existing_idx = i
+                break
+            if lib_id and itm.get("library_item_id") == str(lib_id):
+                if resolved_time is not None and itm.get("time") is not None:
+                    if abs(float(itm["time"]) - float(resolved_time)) <= 5.0:
+                        existing_idx = i
+                        break
+
+        if existing_idx is not None:
+            data["tombstones"][existing_idx].update({k: v for k, v in entry.items() if v is not None})
+        else:
+            data["tombstones"].append(entry)
+
+        # Write to all candidate paths to guarantee survivability across updates
+        for p in get_tombstone_file_paths():
+            try:
+                p_dir = os.path.dirname(p)
+                if p_dir and not os.path.exists(p_dir):
+                    os.makedirs(p_dir, exist_ok=True)
+                with open(p, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=2)
+            except Exception as write_err:
+                logger.debug(f"Notice writing tombstone to {p}: {write_err}")
     except Exception as e:
         logger.warning(f"Could not record tombstone: {e}")
 
-def is_bookmark_tombstoned(lib_id: Optional[str], book_time: Optional[float], snippet_id: Optional[str] = None) -> bool:
+def is_bookmark_tombstoned(
+    lib_id: Optional[str] = None,
+    book_time: Optional[float] = None,
+    snippet_id: Optional[str] = None,
+    title: Optional[str] = None,
+    created_at: Optional[Any] = None,
+    book_title: Optional[str] = None
+) -> bool:
+    """
+    Checks if a candidate bookmark was previously deleted by the user.
+    Matches across multiple identifiers: ABS bookmark id, libraryItemId + time offset (within 35s),
+    createdAt timestamps, or titles for unavailable/moved books.
+    """
     data = load_deleted_tombstones()
+    clean_snip = str(snippet_id).strip().strip("/") if snippet_id else ""
+    str_lib_id = str(lib_id).strip() if lib_id and str(lib_id).strip() not in ("N/A", "unknown", "") else ""
+
     for item in data.get("tombstones", []):
-        if snippet_id and item.get("snippet_id") and snippet_id in item.get("snippet_id"):
-            return True
-        if lib_id and item.get("library_item_id") == str(lib_id):
-            if book_time is not None and item.get("time") is not None:
-                if abs(float(item["time"]) - float(book_time)) <= 5.0:
+        t_snip = str(item.get("snippet_id") or "").strip().strip("/")
+        t_bm_id = str(item.get("bookmark_id") or "").strip()
+        t_lib = str(item.get("library_item_id") or "").strip()
+
+        # 1. Direct snippet ID or bookmark ID match
+        if clean_snip:
+            if t_snip and (clean_snip == t_snip or clean_snip in t_snip or t_snip in clean_snip):
+                return True
+            if t_bm_id and (clean_snip == t_bm_id or clean_snip in t_bm_id):
+                return True
+
+        # 2. Match by library_item_id and time offset
+        if str_lib_id and t_lib and str_lib_id == t_lib:
+            if book_time is not None:
+                for cand_t in (item.get("time"), item.get("current_time"), item.get("start_time")):
+                    if cand_t is not None:
+                        # Allow up to 35s difference to cover pre-roll window offsets
+                        if abs(float(cand_t) - float(book_time)) <= 35.0:
+                            return True
+
+        # 3. Match by unique createdAt timestamp
+        if created_at and item.get("created_at"):
+            try:
+                c1 = float(created_at)
+                c2 = float(item["created_at"])
+                if c1 > 1e11: c1 /= 1000.0
+                if c2 > 1e11: c2 /= 1000.0
+                if abs(c1 - c2) <= 3.0:
                     return True
+            except Exception:
+                pass
+            if str(created_at).strip() == str(item.get("created_at")).strip():
+                return True
+
+        # 4. Fallback match for unextractable/unavailable books (where lib_id might be missing)
+        if not str_lib_id or not t_lib:
+            if book_time is not None and item.get("time") is not None:
+                if abs(float(item["time"]) - float(book_time)) <= 15.0:
+                    if title and item.get("title") and title.strip().lower() == str(item.get("title")).strip().lower():
+                        return True
+                    if book_title and item.get("book_title") and book_title.strip().lower() in str(item.get("book_title")).strip().lower():
+                        return True
+
     return False
 
 _sync_state: Dict[str, Any] = {
@@ -1405,6 +1538,18 @@ def create_unextractable_bookmark_snippet(
 
     bm_title = bookmark_data.get("title") or "N/A"
     resolved_lib_id = library_item_id or bookmark_data.get("libraryItemId") or "N/A"
+    bm_id = bookmark_data.get("id")
+
+    if is_bookmark_tombstoned(
+        lib_id=resolved_lib_id,
+        book_time=current_time,
+        snippet_id=bm_id,
+        title=bm_title,
+        created_at=created_at_raw,
+        book_title=bookmark_data.get("book_title")
+    ):
+        logger.info(f"Skipping creation of unextractable bookmark because it was deleted by user: lib={resolved_lib_id}, time={current_time}")
+        return {"status": "skipped", "message": "Bookmark was previously deleted by user"}
 
     # 3. Attempt to fetch book metadata from Audiobookshelf if accessible
     book_title = "N/A"
@@ -1666,6 +1811,23 @@ def process_bookmark_extraction(
             server_url=target_server
         )
 
+    # Check if this bookmark was previously deleted by user (tombstone)
+    cand_lib_id = library_item_id or (bookmark_data.get("libraryItemId") if bookmark_data else None)
+    cand_time = snippet_request.start_time
+    cand_snip_id = snippet_request.bookmark_id
+    cand_title = bookmark_data.get("title") if bookmark_data else None
+    cand_created_at = (bookmark_data.get("createdAt") or bookmark_data.get("created_at")) if bookmark_data else None
+
+    if is_bookmark_tombstoned(
+        lib_id=cand_lib_id,
+        book_time=cand_time,
+        snippet_id=cand_snip_id,
+        title=cand_title,
+        created_at=cand_created_at
+    ):
+        logger.info(f"Skipping bookmark extraction because it was deleted by user: lib={cand_lib_id}, time={cand_time}")
+        return {"status": "skipped", "message": "Bookmark was previously deleted by user"}
+
     # 4. Resolve target audio file, book metadata, and timestamp
     try:
         session_state = resolve_audio_target(
@@ -1696,6 +1858,18 @@ def process_bookmark_extraction(
     chapter_name = session_state["chapter_name"]
     resolved_lib_item_id = session_state["libraryItemId"]
     start_offset = float(session_state.get("startOffset") or 0.0)
+
+    # Re-verify tombstone with fully resolved current_time and book title
+    if is_bookmark_tombstoned(
+        lib_id=resolved_lib_item_id,
+        book_time=float(current_time),
+        snippet_id=cand_snip_id,
+        title=cand_title,
+        created_at=cand_created_at,
+        book_title=book_title
+    ):
+        logger.info(f"Skipping bookmark extraction for '{book_title}' at {current_time}s because it was deleted by user")
+        return {"status": "skipped", "message": "Bookmark was previously deleted by user"}
 
     # Combine book title and subtitle if applicable
     if subtitle and subtitle.strip() and subtitle.strip().lower() not in book_title.lower():
@@ -2173,7 +2347,14 @@ def run_bookmark_sync_cycle(force_token: Optional[str] = None, force_server: Opt
 
             # Check if user previously deleted this bookmark (tombstone)
             bm_id = bm_data.get("id")
-            if is_bookmark_tombstoned(lib_id, bm_time, bm_id):
+            bm_title = bm_data.get("title") or ""
+            if is_bookmark_tombstoned(
+                lib_id=lib_id,
+                book_time=bm_time,
+                snippet_id=bm_id,
+                title=bm_title,
+                created_at=created_at_raw
+            ):
                 skipped_tombstone_count += 1
                 return
 
@@ -2694,11 +2875,22 @@ async def get_user_bookmarks(
                                 )
                                 transcript_text = f"{header}{transcript_text}"
 
-                            seen_ids.add(item_unique_key)
                             cur_time_val = float(metadata.get("current_time", float(metadata.get("start_time", 0.0)) + (float(metadata.get("duration", 60)) / 2.0)))
+                            full_id = f"{book_dir}-{base_name}"
+                            if is_bookmark_tombstoned(
+                                lib_id=metadata.get("library_item_id"),
+                                book_time=cur_time_val,
+                                snippet_id=full_id,
+                                title=metadata.get("title") or metadata.get("chapter"),
+                                created_at=metadata.get("created_at") or metadata.get("date_time"),
+                                book_title=metadata.get("book_title") or book_dir
+                            ):
+                                continue
+
+                            seen_ids.add(item_unique_key)
                             mp3_mtime = int(os.path.getmtime(mp3_path)) if (has_mp3 and os.path.exists(mp3_path)) else int(time.time())
                             bookmarks.append({
-                                "id": f"{book_dir}-{base_name}",
+                                "id": full_id,
                                 "book_title": metadata.get("book_title") or book_dir,
                                 "author": metadata.get("author") or "Unknown Author",
                                 "chapter": metadata.get("chapter") or "",
@@ -3092,6 +3284,7 @@ async def delete_user_bookmark(
     """
     Permanently deletes a snippet/bookmark and its associated .mp3, .md, and .json files from the server.
     Scans all candidate volume roots and user folder variants.
+    Persistently records a tombstone so the bookmark is never recreated on server sync or update.
     """
     server_url = resolve_abs_server_url(
         header_url=request.headers.get("X-ABS-Server-Url") or request.headers.get("X-Server-Url") or request.headers.get("X-ABS-URL"),
@@ -3102,12 +3295,47 @@ async def delete_user_bookmark(
     safe_username = sanitize_filename(username)
     user_id = user["id"]
 
+    # Extract metadata sent from the web frontend
+    req_lib_id = request.query_params.get("library_item_id")
+    req_time_str = request.query_params.get("time")
+    req_start_str = request.query_params.get("start_time")
+    req_book_title = request.query_params.get("book_title")
+    req_created_at = request.query_params.get("created_at")
+    req_timestamp = request.query_params.get("timestamp")
+
+    resolved_time = None
+    if req_time_str:
+        try:
+            resolved_time = float(req_time_str)
+        except Exception:
+            pass
+    resolved_start = None
+    if req_start_str:
+        try:
+            resolved_start = float(req_start_str)
+        except Exception:
+            pass
+
     deleted_count = 0
     candidate_roots = get_candidate_volume_dirs()
     user_search_names = list(dict.fromkeys([safe_username, safe_username.lower(), user_id]))
 
     clean_id = snippet_id.strip().strip("/")
     target_pattern = clean_id[2:] if clean_id.startswith("b-") else clean_id
+
+    # Normalized variants for robust matching against filenames & folder names
+    id_variants = {
+        clean_id.lower(),
+        clean_id.lower().replace(" ", "_"),
+        clean_id.lower().replace("_", " "),
+        target_pattern.lower(),
+        target_pattern.lower().replace(" ", "_"),
+        target_pattern.lower().replace("_", " "),
+    }
+    if req_timestamp:
+        id_variants.add(req_timestamp.lower())
+
+    found_metadata: Dict[str, Any] = {}
 
     for root in candidate_roots:
         for u in user_search_names:
@@ -3122,22 +3350,43 @@ async def delete_user_bookmark(
                     full_book_path = os.path.join(base_dir, book_dir)
                     if not os.path.isdir(full_book_path):
                         continue
+
+                    # First check any companion .json files in this folder to extract metadata before deleting
                     for fname in os.listdir(full_book_path):
                         base_name = os.path.splitext(fname)[0]
                         full_id = f"{book_dir}-{base_name}"
-                        if clean_id in (full_id, base_name, fname) or target_pattern in (base_name, fname):
+                        
+                        is_match = (
+                            clean_id in (full_id, base_name, fname) or
+                            target_pattern in (base_name, fname) or
+                            full_id.lower() in id_variants or
+                            base_name.lower() in id_variants or
+                            (req_timestamp and req_timestamp in base_name)
+                        )
+
+                        if is_match and fname.endswith(".json") and not found_metadata:
+                            json_candidate = os.path.join(full_book_path, fname)
+                            try:
+                                with open(json_candidate, "r", encoding="utf-8") as jf:
+                                    found_metadata = json.load(jf)
+                            except Exception:
+                                pass
+
+                    # Now remove all matching companion files (.md, .mp3, .json)
+                    for fname in os.listdir(full_book_path):
+                        base_name = os.path.splitext(fname)[0]
+                        full_id = f"{book_dir}-{base_name}"
+
+                        is_match = (
+                            clean_id in (full_id, base_name, fname) or
+                            target_pattern in (base_name, fname) or
+                            full_id.lower() in id_variants or
+                            base_name.lower() in id_variants or
+                            (req_timestamp and req_timestamp in base_name)
+                        )
+
+                        if is_match:
                             file_to_del = os.path.join(full_book_path, fname)
-                            if fname.endswith(".json"):
-                                try:
-                                    with open(file_to_del, "r", encoding="utf-8") as jf:
-                                        jdata = json.load(jf)
-                                        record_deleted_tombstone(
-                                            snippet_id=clean_id,
-                                            lib_id=jdata.get("library_item_id"),
-                                            book_time=float(jdata.get("current_time", jdata.get("start_time", 0)))
-                                        )
-                                except Exception:
-                                    pass
                             try:
                                 os.remove(file_to_del)
                                 deleted_count += 1
@@ -3145,19 +3394,60 @@ async def delete_user_bookmark(
                             except Exception as e:
                                 logger.warning(f"Could not delete {file_to_del}: {e}")
 
+                    # Clean up empty book directory if all files deleted
                     try:
                         if os.path.isdir(full_book_path) and not os.listdir(full_book_path):
                             os.rmdir(full_book_path)
                     except Exception:
                         pass
 
-    # Ensure tombstone is always recorded even if file search was non-standard
-    record_deleted_tombstone(snippet_id=clean_id)
+    # Extract final values for persistent tombstone
+    final_lib_id = req_lib_id or found_metadata.get("library_item_id")
+    final_time = resolved_time if resolved_time is not None else found_metadata.get("current_time", found_metadata.get("start_time"))
+    if final_time is not None:
+        try:
+            final_time = float(final_time)
+        except Exception:
+            final_time = None
+    final_start = resolved_start if resolved_start is not None else found_metadata.get("start_time")
+    if final_start is not None:
+        try:
+            final_start = float(final_start)
+        except Exception:
+            final_start = None
+
+    final_book_title = req_book_title or found_metadata.get("book_title")
+    final_title = found_metadata.get("title") or found_metadata.get("bookmark_title")
+    final_created_at = req_created_at or found_metadata.get("created_at") or found_metadata.get("date_time")
+    final_timestamp = req_timestamp or found_metadata.get("timestamp") or clean_id
+
+    # Record tombstone across all persistent file paths
+    record_deleted_tombstone(
+        snippet_id=clean_id,
+        lib_id=final_lib_id,
+        book_time=final_time,
+        start_time=final_start,
+        current_time=final_time,
+        book_title=final_book_title,
+        title=final_title,
+        created_at=final_created_at,
+        timestamp=final_timestamp
+    )
+
+    # Best-effort attempt to remove the bookmark from upstream Audiobookshelf server if permitted
+    if final_lib_id and final_lib_id not in ("N/A", "unknown") and final_time is not None and server_url and raw_token:
+        try:
+            abs_del_url = f"{server_url.rstrip('/')}/api/me/bookmark/{final_lib_id}/{int(final_time)}"
+            _http_session.delete(abs_del_url, headers={"Authorization": f"Bearer {raw_token}"}, timeout=4)
+            logger.info(f"Notified ABS server to delete bookmark in item {final_lib_id} at {int(final_time)}s")
+        except Exception as abs_err:
+            logger.debug(f"Upstream ABS server delete response notice: {abs_err}")
 
     return {
         "status": "success",
         "deleted_id": snippet_id,
-        "files_removed": deleted_count
+        "files_removed": deleted_count,
+        "tombstone_recorded": True
     }
 
 

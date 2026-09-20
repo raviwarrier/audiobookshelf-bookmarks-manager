@@ -461,8 +461,14 @@ async function startServer() {
   // System configuration endpoint: provides detected ports & server URLs
   app.get("/api/config", (req, res) => {
     const sidecarPort = process.env.SIDECAR_PORT || 13380;
-    const absServer = process.env.ABS_TARGET_SERVER || process.env.ABS_SERVER_URL || "";
-    const defaultAbsUrl = (process.env.DEFAULT_ABS_URL || process.env.ABS_PUBLIC_URL || absServer || "").trim();
+    const absServer = (process.env.ABS_TARGET_SERVER || process.env.ABS_SERVER_URL || "").trim();
+    let defaultAbsUrl = (process.env.DEFAULT_ABS_URL || process.env.ABS_PUBLIC_URL || "").trim();
+    if (!defaultAbsUrl || defaultAbsUrl.includes("abs.example.com")) {
+      defaultAbsUrl = absServer && !absServer.includes("abs.example.com") ? absServer : "";
+    }
+    if (!defaultAbsUrl) {
+      defaultAbsUrl = absServer || "http://localhost:13378";
+    }
     const sidecarUrl = process.env.SIDECAR_URL || `http://localhost:${sidecarPort}`;
     const useBackendProxy = process.env.USE_BACKEND_PROXY ? process.env.USE_BACKEND_PROXY !== "false" : true;
     res.json({
