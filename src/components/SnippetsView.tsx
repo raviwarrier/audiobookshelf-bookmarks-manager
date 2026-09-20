@@ -21,9 +21,11 @@ import {
   ArrowUpDown,
   ArrowUp,
   ArrowDown,
-  Calendar
+  Calendar,
+  Settings,
+  Clock
 } from 'lucide-react';
-import { Snippet, AbsUser, SyncState } from '../types';
+import { Snippet, AbsUser, SyncState, CutoffMode, CutoffConfig } from '../types';
 
 interface SnippetsViewProps {
   snippets: Snippet[];
@@ -39,6 +41,7 @@ interface SnippetsViewProps {
   onNavigateToCapture: () => void;
   onRefreshSnippets?: () => Promise<void>;
   isLoadingSnippets?: boolean;
+  onCutoffUpdated?: (newSyncState: SyncState) => void;
 }
 
 export const SnippetsView: React.FC<SnippetsViewProps> = ({
@@ -55,6 +58,7 @@ export const SnippetsView: React.FC<SnippetsViewProps> = ({
   onNavigateToCapture,
   onRefreshSnippets,
   isLoadingSnippets = false,
+  onCutoffUpdated,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -77,6 +81,130 @@ export const SnippetsView: React.FC<SnippetsViewProps> = ({
   // Sorting state (by Date or Book, Ascending / Descending)
   const [sortField, setSortField] = useState<'date' | 'book'>('date');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
+
+  // Cutoff Period Configuration State
+  const [isCutoffModalOpen, setIsCutoffModalOpen] = useState<boolean>(false);
+  const [selectedCutoffMode, setSelectedCutoffMode] = useState<CutoffMode>(
+    syncState?.cutoff_mode || 'from_now'
+  );
+  const [customDateInput, setCustomDateInput] = useState<string>(
+    syncState?.custom_cutoff_date || syncState?.installation_date || new Date().toISOString().slice(0, 10)
+  );
+  const [isSavingCutoff, setIsSavingCutoff] = useState<boolean>(false);
+  const [cutoffSaveError, setCutoffSaveError] = useState<string | null>(null);
+  const [cutoffSaveSuccess, setCutoffSaveSuccess] = useState<string | null>(null);
+
+  // Keep cutoff modal in sync when syncState changes externally
+  useEffect(() => {
+    if (syncState?.cutoff_mode) {
+      setSelectedCutoffMode(syncState.cutoff_mode);
+    }
+    if (syncState?.custom_cutoff_date) {
+      setCustomDateInput(syncState.custom_cutoff_date);
+    } else if (syncState?.installation_date && !customDateInput) {
+      setCustomDateInput(syncState.installation_date);
+    }
+  }, [syncState?.cutoff_mode, syncState?.custom_cutoff_date, syncState?.installation_date]);
+
+  const handleSaveCutoffConfig = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSavingCutoff(true);
+    setCutoffSaveError(null);
+    setCutoffSaveSuccess(null);
+
+    try {
+      let formattedDate: string | undefined = undefined;
+      if (selectedCutoffMode === 'custom_date') {
+        const clean = customDateInput.trim().replace(/[/.]/g, '-');
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(clean)) {
+          throw new Error('Please enter a valid date in YYYY-MM-DD or YYYY/MM/DD format.');
+        }
+        formattedDate = clean;
+      }
+
+      const payload = {
+        cutoff_mode: selectedCutoffMode,
+        custom_date: formattedDate
+      };
+
+      const endpoint = `${sidecarUrl.replace(/\/+$/, '')}/api/cutoff-config`;
+      let data: any = null;
+
+      if (useProxy) {
+        const res = await fetch('/api/proxy/abs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            targetUrl: endpoint,
+            method: 'POST',
+            headers: {
+              'Authorization': activeToken ? `Bearer ${activeToken}` : '',
+              'X-ABS-Server-Url': serverUrl,
+              'Content-Type': 'application/json'
+            },
+            body: payload
+          })
+        });
+        const json = await res.json();
+        if (!res.ok || !json.ok) {
+          throw new Error(json.error || json.data?.detail || 'Failed to update cutoff configuration');
+        }
+        data = json.data;
+      } else {
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Authorization': activeToken ? `Bearer ${activeToken}` : '',
+            'X-ABS-Server-Url': serverUrl,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(payload)
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.detail || err.error || `Failed with status ${res.status}`);
+        }
+        data = await res.json();
+      }
+
+      setCutoffSaveSuccess('Cutoff period updated successfully!');
+      
+      // Update local sync state if available
+      if (data?.config && onCutoffUpdated) {
+        onCutoffUpdated({
+          is_syncing: syncState?.is_syncing || false,
+          last_synced_at: syncState?.last_synced_at || null,
+          total_synced: syncState?.total_synced || 0,
+          current_item: syncState?.current_item || null,
+          last_error: null,
+          installation_date: data.config.installation_date,
+          cutoff_datetime: data.config.cutoff_datetime,
+          cutoff_mode: data.config.cutoff_mode,
+          custom_cutoff_date: data.config.custom_date,
+          installed_at: data.config.installed_at,
+          skipped_before_cutoff: syncState?.skipped_before_cutoff || 0,
+          skipped_tombstoned: syncState?.skipped_tombstoned || 0,
+        });
+      }
+
+      // Trigger re-sync with newly configured cutoff
+      if (onTriggerSync) {
+        setTimeout(() => {
+          onTriggerSync();
+        }, 500);
+      }
+
+      setTimeout(() => {
+        setIsCutoffModalOpen(false);
+        setCutoffSaveSuccess(null);
+      }, 1200);
+
+    } catch (err: unknown) {
+      setCutoffSaveError(err instanceof Error ? err.message : 'Error updating cutoff configuration');
+    } finally {
+      setIsSavingCutoff(false);
+    }
+  };
 
   useEffect(() => {
     if (!openExportDropdownId) return;
@@ -329,18 +457,34 @@ export const SnippetsView: React.FC<SnippetsViewProps> = ({
             <span className="text-xs text-neutral-400 font-mono">
               {snippets.length} snippets
             </span>
-            <span
-              className="inline-flex items-center gap-1.5 px-2 py-0.5 bg-neutral-900 border border-neutral-800 text-[11px] text-neutral-300 font-mono rounded"
-              title="Immutable installation cutoff: Bookmarks created prior to first installation date at 00:00:00 are preserved and ignored during sync."
+            <button
+              onClick={() => setIsCutoffModalOpen(true)}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-neutral-900 hover:bg-neutral-850 border border-neutral-800 hover:border-neutral-650 text-[11px] text-neutral-300 hover:text-white font-mono rounded transition-colors group cursor-pointer"
+              title="Click to configure bookmark cutoff period: 'from start', 'from yyyy/mm/dd', or 'from now'"
             >
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-              <span>Cutoff: {syncState?.installation_date ? `${syncState.installation_date} 00:00` : 'First install'}</span>
+              <span className={`w-1.5 h-1.5 rounded-full ${
+                syncState?.cutoff_mode === 'from_start' ? 'bg-amber-400' :
+                syncState?.cutoff_mode === 'custom_date' ? 'bg-sky-400' :
+                'bg-emerald-500'
+              }`}></span>
+              <span>
+                Cutoff: {
+                  syncState?.cutoff_mode === 'from_start'
+                    ? 'From start (all bookmarks)'
+                    : syncState?.cutoff_mode === 'custom_date'
+                    ? `From ${syncState.custom_cutoff_date || 'custom date'}`
+                    : syncState?.installation_date
+                    ? `From ${syncState.installation_date} (now)`
+                    : 'From install date'
+                }
+              </span>
               {typeof syncState?.skipped_before_cutoff === 'number' && syncState.skipped_before_cutoff > 0 && (
                 <span className="text-neutral-500 border-l border-neutral-700 pl-1.5 ml-0.5">
-                  {syncState.skipped_before_cutoff} historical skipped
+                  {syncState.skipped_before_cutoff} skipped
                 </span>
               )}
-            </span>
+              <Settings className="w-3 h-3 text-neutral-500 group-hover:text-neutral-300 ml-1 transition-colors" />
+            </button>
           </div>
         </div>
 
@@ -898,6 +1042,173 @@ export const SnippetsView: React.FC<SnippetsViewProps> = ({
                       <Sliders className="w-3.5 h-3.5" />
                       <span>Update & Replace Snippet</span>
                     </>
+                  )}
+                </button>
+              </div>
+            </form>
+
+          </div>
+        </div>
+      )}
+
+      {/* Admin Bookmark Cutoff Period Configuration Modal */}
+      {isCutoffModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
+          <div className="bg-[#121212] border border-neutral-800 max-w-md w-full p-6 text-xs text-neutral-200 font-mono shadow-2xl relative">
+            
+            <div className="flex items-center justify-between border-b border-neutral-800 pb-3 mb-4">
+              <div className="flex items-center gap-2">
+                <Settings className="w-4 h-4 text-emerald-400" />
+                <h3 className="font-semibold text-white uppercase text-sm">
+                  Bookmark Cutoff Period
+                </h3>
+              </div>
+              <button
+                onClick={() => setIsCutoffModalOpen(false)}
+                className="text-neutral-400 hover:text-white p-1"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <p className="text-neutral-400 mb-4 text-[11px] leading-relaxed">
+              Configure which historical Audiobookshelf bookmarks are processed. Only bookmarks created within this period will be transcribed and clipped.
+            </p>
+
+            {cutoffSaveError && (
+              <div className="p-2.5 mb-3 bg-red-950/40 border border-red-800 text-red-400 flex items-center gap-2 text-[11px]">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                <span>{cutoffSaveError}</span>
+              </div>
+            )}
+
+            {cutoffSaveSuccess && (
+              <div className="p-2.5 mb-3 bg-emerald-950/40 border border-emerald-800 text-emerald-300 flex items-center gap-2 text-[11px]">
+                <Check className="w-3.5 h-3.5 shrink-0" />
+                <span>{cutoffSaveSuccess}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleSaveCutoffConfig} className="space-y-4">
+              <div className="space-y-2.5">
+
+                {/* Option 1: From Start */}
+                <label
+                  className={`flex items-start gap-3 p-3 border cursor-pointer transition-colors ${
+                    selectedCutoffMode === 'from_start'
+                      ? 'border-neutral-200 bg-neutral-900/90 text-white'
+                      : 'border-neutral-800 bg-[#161616] text-neutral-300 hover:border-neutral-700'
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="cutoff_mode"
+                    value="from_start"
+                    checked={selectedCutoffMode === 'from_start'}
+                    onChange={() => setSelectedCutoffMode('from_start')}
+                    className="mt-0.5 text-neutral-100 focus:ring-0"
+                  />
+                  <div className="space-y-0.5">
+                    <div className="font-semibold flex items-center gap-1.5">
+                      <Clock className="w-3 h-3 text-amber-400" />
+                      <span>From start</span>
+                    </div>
+                    <div className="text-[11px] text-neutral-400">
+                      Process all bookmarks from the beginning of the server.
+                    </div>
+                  </div>
+                </label>
+
+                {/* Option 2: From Custom Date (YYYY/MM/DD) */}
+                <label
+                  className={`flex items-start gap-3 p-3 border cursor-pointer transition-colors ${
+                    selectedCutoffMode === 'custom_date'
+                      ? 'border-neutral-200 bg-neutral-900/90 text-white'
+                      : 'border-neutral-800 bg-[#161616] text-neutral-300 hover:border-neutral-700'
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="cutoff_mode"
+                    value="custom_date"
+                    checked={selectedCutoffMode === 'custom_date'}
+                    onChange={() => setSelectedCutoffMode('custom_date')}
+                    className="mt-0.5 text-neutral-100 focus:ring-0"
+                  />
+                  <div className="space-y-2 flex-1">
+                    <div className="font-semibold flex items-center gap-1.5">
+                      <Calendar className="w-3 h-3 text-sky-400" />
+                      <span>From yyyy/mm/dd</span>
+                    </div>
+                    <div className="text-[11px] text-neutral-400">
+                      Only process bookmarks created on or after this specific date at 00:00.
+                    </div>
+
+                    {selectedCutoffMode === 'custom_date' && (
+                      <div className="pt-1">
+                        <input
+                          type="date"
+                          value={customDateInput}
+                          onChange={(e) => setCustomDateInput(e.target.value)}
+                          max={new Date().toISOString().slice(0, 10)}
+                          className="w-full bg-[#1e1e1e] border border-neutral-700 focus:border-neutral-300 text-white px-2.5 py-1.5 text-xs font-mono outline-none"
+                        />
+                      </div>
+                    )}
+                  </div>
+                </label>
+
+                {/* Option 3: From Now (Installation Date) */}
+                <label
+                  className={`flex items-start gap-3 p-3 border cursor-pointer transition-colors ${
+                    selectedCutoffMode === 'from_now'
+                      ? 'border-neutral-200 bg-neutral-900/90 text-white'
+                      : 'border-neutral-800 bg-[#161616] text-neutral-300 hover:border-neutral-700'
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="cutoff_mode"
+                    value="from_now"
+                    checked={selectedCutoffMode === 'from_now'}
+                    onChange={() => setSelectedCutoffMode('from_now')}
+                    className="mt-0.5 text-neutral-100 focus:ring-0"
+                  />
+                  <div className="space-y-0.5">
+                    <div className="font-semibold flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                      <span>From now (installation date)</span>
+                    </div>
+                    <div className="text-[11px] text-neutral-400">
+                      Process bookmarks created on or after installation date ({syncState?.installation_date || 'first install'}). Older historical bookmarks are excluded.
+                    </div>
+                  </div>
+                </label>
+
+              </div>
+
+              {/* Modal Actions */}
+              <div className="pt-3 border-t border-neutral-800 flex items-center justify-end gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setIsCutoffModalOpen(false)}
+                  disabled={isSavingCutoff}
+                  className="px-3 py-1.5 border border-neutral-700 hover:border-neutral-500 text-neutral-300 hover:text-white transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingCutoff}
+                  className="px-4 py-1.5 bg-neutral-100 text-black hover:bg-white font-semibold flex items-center gap-2 transition-colors disabled:opacity-50"
+                >
+                  {isSavingCutoff ? (
+                    <>
+                      <RotateCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Saving...</span>
+                    </>
+                  ) : (
+                    <span>Save & Apply</span>
                   )}
                 </button>
               </div>

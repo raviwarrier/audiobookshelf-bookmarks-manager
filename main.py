@@ -156,6 +156,10 @@ def init_or_load_installation_config() -> Dict[str, Any]:
     Checks if an installation date configuration file exists in the installation folder or volume.
     If both file exists and date exists in it: DOES NOT overwrite with a new file.
     If it doesn't exist: dynamically creates a new file populated from current system date and time.
+    Supports configurable cutoff modes:
+    - 'from_start': Extract all bookmarks from the beginning of the server (cutoff effectively 0).
+    - 'custom_date': Extract bookmarks created on or after YYYY-MM-DD.
+    - 'from_now': Extract bookmarks created on or after installation/activation date.
     """
     candidate_paths = get_installation_config_paths()
 
@@ -167,7 +171,9 @@ def init_or_load_installation_config() -> Dict[str, Any]:
                     data = json.load(f)
                     date_val = data.get("cutoff_datetime") or data.get("installation_date") or data.get("installed_at")
                     if date_val:
-                        logger.info(f"[Installation Config] Found existing immutable installation config at '{p}': {date_val}")
+                        if "cutoff_mode" not in data:
+                            data["cutoff_mode"] = "from_now"
+                        logger.info(f"[Installation Config] Found existing installation config at '{p}': mode={data.get('cutoff_mode')}, cutoff={data.get('cutoff_datetime') or date_val}")
                         return data
             except Exception as e:
                 logger.warning(f"[Installation Config] Error reading {p}: {e}")
@@ -181,12 +187,14 @@ def init_or_load_installation_config() -> Dict[str, Any]:
     cutoff_ts = cutoff_dt.timestamp()
 
     config_data = {
+        "cutoff_mode": "from_now",
+        "custom_date": None,
         "installation_date": date_str,
         "cutoff_datetime": cutoff_datetime,
         "cutoff_timestamp": cutoff_ts,
         "installed_at": now_local.isoformat(),
         "installed_at_utc": now_utc.isoformat(),
-        "note": f"Immutable installation date created dynamically on first install. Bookmarks created prior to {cutoff_datetime} are excluded from automated extraction."
+        "note": f"Configurable bookmark cutoff period. Default mode: 'from_now' (bookmarks created prior to {cutoff_datetime} excluded)."
     }
 
     # Save to candidate locations (application folder & volume directory)
@@ -197,7 +205,7 @@ def init_or_load_installation_config() -> Dict[str, Any]:
                 os.makedirs(parent, exist_ok=True)
             with open(p, "w", encoding="utf-8") as f:
                 json.dump(config_data, f, indent=2)
-            logger.info(f"[Installation Config] Created new immutable installation date file at '{p}' with system date {date_str}")
+            logger.info(f"[Installation Config] Created new installation date file at '{p}' with system date {date_str}")
         except Exception as e:
             logger.warning(f"[Installation Config] Failed to create {p}: {e}")
 
@@ -205,12 +213,40 @@ def init_or_load_installation_config() -> Dict[str, Any]:
 
 INSTALLATION_CONFIG = init_or_load_installation_config()
 
+def save_installation_config(new_config: Dict[str, Any]) -> None:
+    """Persists updated cutoff configuration to candidate file paths and refreshes runtime globals."""
+    global INSTALLATION_CONFIG, _sync_state
+    INSTALLATION_CONFIG.update(new_config)
+    candidate_paths = get_installation_config_paths()
+    for p in candidate_paths[:2]:
+        try:
+            parent = os.path.dirname(p)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            with open(p, "w", encoding="utf-8") as f:
+                json.dump(INSTALLATION_CONFIG, f, indent=2)
+            logger.info(f"[Installation Config] Updated cutoff config saved to '{p}'")
+        except Exception as e:
+            logger.warning(f"[Installation Config] Failed writing updated config to '{p}': {e}")
+
+    # Synchronize _sync_state
+    _sync_state["installation_date"] = INSTALLATION_CONFIG.get("installation_date")
+    _sync_state["cutoff_datetime"] = INSTALLATION_CONFIG.get("cutoff_datetime")
+    _sync_state["cutoff_mode"] = INSTALLATION_CONFIG.get("cutoff_mode", "from_now")
+    _sync_state["custom_cutoff_date"] = INSTALLATION_CONFIG.get("custom_date")
+
 def is_bookmark_after_installation_cutoff(created_at_raw: Any) -> bool:
     """
-    Checks if a bookmark was created on or after the installation date at 0:00:00.
-    Returns True if created on or after the cutoff date.
-    Returns False if created before the cutoff date or if creation date cannot be verified.
+    Checks if a bookmark was created on or after the configured cutoff date/mode:
+    - 'from_start': Always returns True (all historical bookmarks included).
+    - 'from_now': Bookmarks on or after the installation date at 00:00:00.
+    - 'custom_date': Bookmarks on or after the specified custom YYYY-MM-DD at 00:00:00.
+    Returns False if created before the cutoff or if creation date cannot be verified.
     """
+    mode = INSTALLATION_CONFIG.get("cutoff_mode", "from_now")
+    if mode == "from_start":
+        return True
+
     if created_at_raw is None or created_at_raw == "":
         return False
 
@@ -318,6 +354,9 @@ _sync_state: Dict[str, Any] = {
     "last_error": None,
     "installation_date": INSTALLATION_CONFIG.get("installation_date"),
     "cutoff_datetime": INSTALLATION_CONFIG.get("cutoff_datetime"),
+    "cutoff_mode": INSTALLATION_CONFIG.get("cutoff_mode", "from_now"),
+    "custom_cutoff_date": INSTALLATION_CONFIG.get("custom_date"),
+    "installed_at": INSTALLATION_CONFIG.get("installed_at"),
     "skipped_before_cutoff": 0,
     "skipped_tombstoned": 0
 }
@@ -1042,6 +1081,18 @@ class SnippetExpandRequest(BaseModel):
     token: Optional[str] = None
     server_url: Optional[str] = None
     serverUrl: Optional[str] = None
+
+
+class CutoffConfigRequest(BaseModel):
+    """
+    Payload for configuring the bookmark extraction cutoff period.
+    Options:
+    - 'from_start': Extracts all bookmarks from server history
+    - 'custom_date': Extracts bookmarks created on or after custom_date (YYYY-MM-DD or YYYY/MM/DD)
+    - 'from_now': Extracts bookmarks created on or after installation/activation date
+    """
+    cutoff_mode: str  # 'from_start' | 'custom_date' | 'from_now'
+    custom_date: Optional[str] = None
 
 
 def format_bookmarked_duration(seconds: float) -> str:
@@ -2166,13 +2217,23 @@ def run_bookmark_sync_cycle(force_token: Optional[str] = None, force_server: Opt
         _sync_state["skipped_tombstoned"] = skipped_tombstone_count
         _sync_state["installation_date"] = INSTALLATION_CONFIG.get("installation_date")
         _sync_state["cutoff_datetime"] = INSTALLATION_CONFIG.get("cutoff_datetime")
+        _sync_state["cutoff_mode"] = INSTALLATION_CONFIG.get("cutoff_mode", "from_now")
+        _sync_state["custom_cutoff_date"] = INSTALLATION_CONFIG.get("custom_date")
+        _sync_state["installed_at"] = INSTALLATION_CONFIG.get("installed_at")
 
         if not candidate_bookmarks:
             _sync_state["last_synced_at"] = datetime.now().isoformat()
             _sync_state["is_syncing"] = False
-            cutoff_date_str = INSTALLATION_CONFIG.get("installation_date", "installation date")
+            mode = INSTALLATION_CONFIG.get("cutoff_mode", "from_now")
+            if mode == "from_start":
+                cutoff_desc = "beginning of server"
+            elif mode == "custom_date":
+                cutoff_desc = f"{INSTALLATION_CONFIG.get('custom_date')} at 00:00"
+            else:
+                cutoff_desc = f"{INSTALLATION_CONFIG.get('installation_date', 'installation date')} at 00:00"
+
             msg = (
-                f"No bookmarks found created on or after {cutoff_date_str} at 00:00 "
+                f"No bookmarks found created on or after {cutoff_desc} "
                 f"({skipped_prior_count} historical bookmarks skipped)."
                 if skipped_prior_count > 0 else
                 "No bookmarks found on Audiobookshelf server."
@@ -2183,8 +2244,10 @@ def run_bookmark_sync_cycle(force_token: Optional[str] = None, force_server: Opt
                 "total_bookmarks": 0,
                 "skipped_before_cutoff": skipped_prior_count,
                 "skipped_tombstoned": skipped_tombstone_count,
+                "cutoff_mode": mode,
                 "cutoff_datetime": INSTALLATION_CONFIG.get("cutoff_datetime"),
-                "installation_date": cutoff_date_str,
+                "installation_date": INSTALLATION_CONFIG.get("installation_date"),
+                "custom_date": INSTALLATION_CONFIG.get("custom_date"),
                 "unextracted_count": 0,
                 "processed_count": 0
             }
@@ -2760,6 +2823,107 @@ async def expand_or_update_snippet(
         replace_timestamp=target_ts
     )
     return result
+
+
+@app.get("/api/cutoff-config")
+@app.get("/api/user/cutoff-config")
+@app.get("/api/installation-date")
+@app.get("/api/user/installation-date")
+async def get_cutoff_configuration():
+    """
+    Returns the current bookmark cutoff configuration including mode:
+    'from_start', 'custom_date', or 'from_now' (installation date).
+    """
+    return {
+        "status": "success",
+        "cutoff_mode": INSTALLATION_CONFIG.get("cutoff_mode", "from_now"),
+        "custom_date": INSTALLATION_CONFIG.get("custom_date"),
+        "installation_date": INSTALLATION_CONFIG.get("installation_date"),
+        "cutoff_datetime": INSTALLATION_CONFIG.get("cutoff_datetime"),
+        "cutoff_timestamp": INSTALLATION_CONFIG.get("cutoff_timestamp"),
+        "installed_at": INSTALLATION_CONFIG.get("installed_at"),
+        "config": INSTALLATION_CONFIG
+    }
+
+
+@app.post("/api/cutoff-config")
+@app.post("/api/user/cutoff-config")
+async def update_cutoff_configuration(
+    payload: CutoffConfigRequest,
+    request: Request,
+    raw_token: Optional[str] = Depends(extract_token_flexible)
+):
+    """
+    Allows the admin to configure the bookmark cutoff period.
+    Three options:
+    1. 'from_start': Processes all bookmarks from the beginning of server history.
+    2. 'custom_date': Processes bookmarks on or after YYYY/MM/DD or YYYY-MM-DD.
+    3. 'from_now': Processes bookmarks from current installation date (or resets to now).
+    """
+    mode = (payload.cutoff_mode or "from_now").strip().lower()
+    if mode not in ("from_start", "custom_date", "from_now"):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid cutoff_mode. Must be 'from_start', 'custom_date', or 'from_now'."
+        )
+
+    updated_config: Dict[str, Any] = {
+        "cutoff_mode": mode
+    }
+
+    if mode == "from_start":
+        updated_config["cutoff_timestamp"] = 0.0
+        updated_config["cutoff_datetime"] = "1970-01-01T00:00:00"
+        updated_config["custom_date"] = None
+        updated_config["note"] = "Extracting all bookmarks from the beginning of the server."
+
+    elif mode == "custom_date":
+        raw_d = (payload.custom_date or "").strip()
+        if not raw_d:
+            raise HTTPException(status_code=400, detail="custom_date is required when cutoff_mode is 'custom_date'.")
+        
+        # Standardize date separators (supports YYYY/MM/DD, YYYY.MM.DD, or YYYY-MM-DD)
+        clean_d = re.sub(r'[/.]', '-', raw_d)[:10]
+        try:
+            dt_obj = datetime.strptime(clean_d, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid custom_date format. Please use YYYY-MM-DD or YYYY/MM/DD.")
+
+        cutoff_dt = datetime(dt_obj.year, dt_obj.month, dt_obj.day, 0, 0, 0)
+        updated_config["custom_date"] = clean_d
+        updated_config["cutoff_datetime"] = f"{clean_d}T00:00:00"
+        updated_config["cutoff_timestamp"] = cutoff_dt.timestamp()
+        updated_config["note"] = f"Extracting bookmarks created on or after {clean_d} at 00:00."
+
+    elif mode == "from_now":
+        # Uses installation date or resets to system date
+        inst_date = INSTALLATION_CONFIG.get("installation_date")
+        if not inst_date:
+            inst_date = datetime.now().strftime("%Y-%m-%d")
+            updated_config["installation_date"] = inst_date
+        clean_d = inst_date[:10]
+        try:
+            parts = [int(p) for p in clean_d.split("-")]
+            cutoff_dt = datetime(parts[0], parts[1], parts[2], 0, 0, 0)
+            cutoff_ts = cutoff_dt.timestamp()
+        except Exception:
+            cutoff_dt = datetime.now()
+            cutoff_ts = cutoff_dt.timestamp()
+
+        updated_config["custom_date"] = None
+        updated_config["cutoff_datetime"] = f"{clean_d}T00:00:00"
+        updated_config["cutoff_timestamp"] = cutoff_ts
+        updated_config["note"] = f"Extracting bookmarks created on or after installation date ({clean_d})."
+
+    # Save to disk and update globals
+    save_installation_config(updated_config)
+    logger.info(f"[Cutoff Config] Successfully updated cutoff period mode='{mode}', cutoff='{updated_config.get('cutoff_datetime')}'")
+
+    return {
+        "status": "success",
+        "message": f"Cutoff period updated to mode '{mode}' ({updated_config.get('cutoff_datetime')})",
+        "config": INSTALLATION_CONFIG
+    }
 
 
 @app.get("/api/export-book")

@@ -423,7 +423,7 @@ async function startServer() {
   });
 
   // Direct proxy for automated bookmark background sync & installation cutoff
-  app.all(["/api/user/sync-bookmarks", "/api/sync-bookmarks", "/api/user/sync-status", "/api/sync-status", "/api/installation-date", "/api/user/installation-date"], async (req, res) => {
+  app.all(["/api/user/sync-bookmarks", "/api/sync-bookmarks", "/api/user/sync-status", "/api/sync-status", "/api/installation-date", "/api/user/installation-date", "/api/cutoff-config", "/api/user/cutoff-config"], async (req, res) => {
     try {
       const sidecarBase = (process.env.SIDECAR_URL || `http://127.0.0.1:${process.env.SIDECAR_PORT || 13380}`).replace(/\/+$/, "");
       const targetUrl = `${sidecarBase}${req.originalUrl}`;
@@ -440,10 +440,12 @@ async function startServer() {
       const data = await sidecarRes.json();
       res.status(sidecarRes.status).json(data);
     } catch (err: unknown) {
-      // If the sidecar is temporarily starting or offline and the client requests installation-date, return cached config
-      if (req.originalUrl.includes("installation-date")) {
+      // If the sidecar is temporarily starting or offline and the client requests installation-date or cutoff-config, return cached config
+      if (req.originalUrl.includes("installation-date") || req.originalUrl.includes("cutoff-config")) {
         return res.json({
           status: "success",
+          cutoff_mode: (installationConfig as any).cutoff_mode || "from_now",
+          custom_date: (installationConfig as any).custom_date || null,
           installation_date: installationConfig.installation_date,
           cutoff_datetime: installationConfig.cutoff_datetime,
           cutoff_timestamp: installationConfig.cutoff_timestamp,

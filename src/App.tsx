@@ -76,7 +76,9 @@ export function App() {
   // Notification toast for automatic background detection
   const [notification, setNotification] = useState<{ message: string; id: string } | null>(null);
   const lastKnownTimestampRef = useRef<string | null>(null);
+  const notifiedIdsRef = useRef<Set<string>>(new Set<string>());
   const isSyncingRef = useRef<boolean>(false);
+  const notificationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Sync user's bookmarks from sidecar's {username}/bookmarks directory
   const syncUserBookmarks = useCallback(async (
@@ -405,18 +407,28 @@ export function App() {
 
         if (statusData && Array.isArray(statusData.recent) && statusData.recent.length > 0) {
           const latestEvent = statusData.recent[statusData.recent.length - 1];
-          if (latestEvent?.timestamp && latestEvent.timestamp !== lastKnownTimestampRef.current) {
-            lastKnownTimestampRef.current = latestEvent.timestamp;
-            // Trigger automatic sync
+          const eventId = latestEvent?.timestamp;
+          if (eventId && !notifiedIdsRef.current.has(eventId)) {
+            // Mark as notified immediately to prevent duplicate triggers
+            notifiedIdsRef.current.add(eventId);
+            lastKnownTimestampRef.current = eventId;
+
+            // Trigger background bookmark refresh
             await syncUserBookmarks(sidecarUrl, activeToken, user.username, useProxy);
             
-            // Show toast notification
+            // Show toast notification exactly once
             const methodLabel = latestEvent.extraction_method === 'intercepted' ? 'mobile bookmark' : 'snippet';
             setNotification({
-              id: latestEvent.timestamp,
-              message: `New ${methodLabel} ready: "${latestEvent.book_title}" (${latestEvent.timestamp})`,
+              id: eventId,
+              message: `New ${methodLabel} ready: "${latestEvent.book_title || 'Audiobook'}" (${eventId})`,
             });
-            setTimeout(() => setNotification(null), 6000);
+
+            if (notificationTimeoutRef.current) {
+              clearTimeout(notificationTimeoutRef.current);
+            }
+            notificationTimeoutRef.current = setTimeout(() => {
+              setNotification((curr) => (curr?.id === eventId ? null : curr));
+            }, 6000);
           }
         }
       } catch {
@@ -650,6 +662,9 @@ export function App() {
               }
             }}
             isLoadingSnippets={isLoadingBookmarks || isTriggeringSync}
+            onCutoffUpdated={(newSyncState) => {
+              setSyncState(newSyncState);
+            }}
           />
         )}
       </main>

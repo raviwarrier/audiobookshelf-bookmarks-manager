@@ -78,6 +78,21 @@ export interface SyncState {
   last_error?: string | null;
   installation_date?: string;
   cutoff_datetime?: string;
+  cutoff_mode?: 'from_start' | 'custom_date' | 'from_now';
+  custom_cutoff_date?: string;
+  installed_at?: string;
   skipped_before_cutoff?: number;
   skipped_tombstoned?: number;
+}
+
+export type CutoffMode = 'from_start' | 'custom_date' | 'from_now';
+
+export interface CutoffConfig {
+  cutoff_mode: CutoffMode;
+  custom_date?: string;
+  installation_date?: string;
+  cutoff_datetime?: string;
+  cutoff_timestamp?: number;
+  installed_at?: string;
+  note?: string;
 }
