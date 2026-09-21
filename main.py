@@ -26,6 +26,7 @@ import logging
 import time
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List, Tuple
+from urllib.parse import quote_plus
 
 try:
     import httpx
@@ -2588,10 +2589,12 @@ class AbsSocketIoListener:
         self._debounce_task = asyncio.create_task(_debounced())
 
     async def start(self):
-        """Main background loop handling connection, heartbeat, and real-time events."""
+        """Main background loop handling connection, heartbeat, and real-time events with robust backoff."""
         self._running = True
         logger.info("[Socket.IO Listener] Background listener initialized.")
         await asyncio.sleep(6)  # Give Audiobookshelf and sidecar time to settle
+
+        backoff_seconds = 5.0
 
         while self._running:
             session = load_sync_session()
@@ -2612,24 +2615,33 @@ class AbsSocketIoListener:
                     pass
                 continue
 
-            ws_url = server_url.replace("https://", "wss://").replace("http://", "ws://").rstrip("/")
-            socket_url = f"{ws_url}/socket.io/?EIO=4&transport=websocket"
-
             if websockets is None:
                 logger.warning("[Socket.IO Listener] websockets package is not installed; falling back to periodic sync polling only.")
                 await asyncio.sleep(60)
                 continue
 
-            try:
-                logger.info(f"[Socket.IO Listener] Connecting to Audiobookshelf at {socket_url}...")
-                connect_kwargs = {
-                    "ping_interval": None,
-                    "ping_timeout": None,
-                    "max_size": 10 * 1024 * 1024,
-                }
+            ws_url = server_url.replace("https://", "wss://").replace("http://", "ws://").rstrip("/")
+            # Audiobookshelf allows token in query params as well as auth/header
+            socket_url = f"{ws_url}/socket.io/?EIO=4&transport=websocket&token={quote_plus(str(token))}"
 
-                # websockets v14+ uses 'additional_headers', v10-13 uses 'extra_headers'
-                headers_dict = {"Authorization": f"Bearer {token}"}
+            connect_kwargs = {
+                "ping_interval": None,
+                "ping_timeout": None,
+                "max_size": 10 * 1024 * 1024,
+            }
+
+            headers_dict = {
+                "Authorization": f"Bearer {token}",
+                "Origin": server_url.rstrip("/"),
+                "User-Agent": "Audiobookshelf-Bookmarks-Manager/2.0.0",
+            }
+
+            connected_at = 0.0
+            disconnect_reason = "Connection closed"
+
+            try:
+                masked_url = socket_url.split("&token=")[0]
+                logger.info(f"[Socket.IO Listener] Connecting to Audiobookshelf at {masked_url}...")
                 try:
                     connect_cm = websockets.connect(socket_url, additional_headers=headers_dict, **connect_kwargs)
                 except TypeError:
@@ -2637,17 +2649,41 @@ class AbsSocketIoListener:
 
                 async with connect_cm as ws:
                     self._connected = True
-                    logger.info("[Socket.IO Listener] Connected to Audiobookshelf Socket.IO server.")
+                    connected_at = time.time()
+                    logger.info("[Socket.IO Listener] Connected to Audiobookshelf WebSocket. Awaiting Engine.IO handshake...")
 
-                    # Socket.IO v4 client handshake: send connect packet
-                    await ws.send(f"40{{\"token\":\"{token}\"}}")
-                    # Emit auth packet
-                    await ws.send(f"42[\"auth\",\"{token}\"]")
+                    # 1. First packet from server MUST be Engine.IO OPEN (starts with '0')
+                    try:
+                        first_msg = await asyncio.wait_for(ws.recv(), timeout=10.0)
+                        if isinstance(first_msg, bytes):
+                            first_msg = first_msg.decode("utf-8", errors="ignore")
+                    except Exception as e:
+                        disconnect_reason = f"Timeout or error awaiting Engine.IO open packet: {e}"
+                        logger.warning(f"[Socket.IO Listener] {disconnect_reason}")
+                        continue
 
+                    if not first_msg.startswith("0"):
+                        disconnect_reason = f"Unexpected initial packet from server: {first_msg[:50]}"
+                        logger.warning(f"[Socket.IO Listener] {disconnect_reason}")
+                        continue
+
+                    logger.debug(f"[Socket.IO Listener] Engine.IO open received: {first_msg[:60]}")
+
+                    # 2. Send Socket.IO CONNECT packet to '/' namespace (packet '40')
+                    await ws.send("40")
+
+                    # 3. Emit Audiobookshelf 'auth' event (packet '42["auth","<token>"]')
+                    await ws.send(f'42["auth","{token}"]')
+                    logger.info("[Socket.IO Listener] Handshake complete and auth event emitted.")
+
+                    # Message listening loop
                     while self._running:
                         try:
                             msg = await ws.recv()
-                        except Exception:
+                        except Exception as recv_err:
+                            close_code = getattr(ws, "close_code", None)
+                            close_reason = getattr(ws, "close_reason", None)
+                            disconnect_reason = f"Recv error ({recv_err}), code: {close_code}, reason: {close_reason}"
                             break
 
                         if isinstance(msg, bytes):
@@ -2673,23 +2709,43 @@ class AbsSocketIoListener:
                                 payload = json.loads(msg[2:])
                                 if isinstance(payload, list) and len(payload) > 0:
                                     event_name = str(payload[0]).lower()
-                                    # Events of interest: user updates, bookmarks, progress, sessions
-                                    if any(k in event_name for k in ["bookmark", "user_updated", "user_item", "session"]):
-                                        logger.info(f"[Socket.IO Listener] Audiobookshelf event received: {event_name}")
+
+                                    # Check for auth rejection
+                                    if event_name == "auth_failed":
+                                        err_detail = payload[1] if len(payload) > 1 else "Invalid or expired token"
+                                        logger.warning(f"[Socket.IO Listener] Authentication rejected by Audiobookshelf: {err_detail}. Re-authenticate via UI.")
+                                        disconnect_reason = "Authentication rejected"
+                                        break
+
+                                    # Events of interest: user updates, bookmarks, progress, sessions, items
+                                    if any(k in event_name for k in ["bookmark", "user_updated", "user_item", "item_updated", "session"]):
+                                        logger.info(f"[Socket.IO Listener] Audiobookshelf real-time event received: {event_name}")
                                         self._schedule_sync()
                             except Exception as parse_err:
                                 logger.debug(f"[Socket.IO Listener] Failed parsing payload: {parse_err}")
 
             except Exception as conn_err:
-                self._connected = False
-                logger.debug(f"[Socket.IO Listener] Connection ended ({conn_err}). Reconnecting in 15 seconds...")
-                self._wake_event.clear()
-                try:
-                    await asyncio.wait_for(self._wake_event.wait(), timeout=15.0)
-                except asyncio.TimeoutError:
-                    pass
+                disconnect_reason = f"Connection error: {conn_err}"
             finally:
                 self._connected = False
+
+            # Calculate how long the connection lasted
+            duration = time.time() - connected_at if connected_at > 0 else 0
+            if duration > 45:
+                # Connection was healthy for over 45 seconds, reset backoff
+                backoff_seconds = 5.0
+            else:
+                # Failed quickly, increase backoff up to 60s
+                backoff_seconds = min(backoff_seconds * 1.8, 60.0)
+
+            logger.info(f"[Socket.IO Listener] {disconnect_reason}. Reconnecting in {int(backoff_seconds)}s...")
+
+            # GUARANTEED BACKOFF WAIT (Cannot be bypassed)
+            self._wake_event.clear()
+            try:
+                await asyncio.wait_for(self._wake_event.wait(), timeout=backoff_seconds)
+            except asyncio.TimeoutError:
+                pass
 
 
 _socket_listener = AbsSocketIoListener()
