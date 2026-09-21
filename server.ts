@@ -460,12 +460,23 @@ async function startServer() {
 
   // System configuration endpoint: provides detected ports & server URLs
   app.get("/api/config", (req, res) => {
+    const normalizeUrl = (u: string) => {
+      if (!u) return "";
+      let t = u.trim().replace(/\/+$/, "");
+      if (t.includes("abs.example.com")) return "";
+      if (t && !t.startsWith("http://") && !t.startsWith("https://")) {
+        if (t.startsWith("localhost") || t.startsWith("127.0.0.1") || t.startsWith("192.168.") || t.startsWith("10.")) {
+          t = `http://${t}`;
+        } else {
+          t = `https://${t}`;
+        }
+      }
+      return t;
+    };
+
     const sidecarPort = process.env.SIDECAR_PORT || 13380;
-    const absServer = (process.env.ABS_TARGET_SERVER || process.env.ABS_SERVER_URL || "").trim();
-    let defaultAbsUrl = (process.env.DEFAULT_ABS_URL || process.env.ABS_PUBLIC_URL || "").trim();
-    if (!defaultAbsUrl || defaultAbsUrl.includes("abs.example.com")) {
-      defaultAbsUrl = absServer && !absServer.includes("abs.example.com") ? absServer : "";
-    }
+    const absServer = normalizeUrl(process.env.ABS_TARGET_SERVER || process.env.ABS_SERVER_URL || "");
+    let defaultAbsUrl = normalizeUrl(process.env.DEFAULT_ABS_URL || process.env.ABS_PUBLIC_URL || "");
     if (!defaultAbsUrl) {
       defaultAbsUrl = absServer || "http://localhost:13378";
     }

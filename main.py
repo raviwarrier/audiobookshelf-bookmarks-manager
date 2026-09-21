@@ -20,6 +20,7 @@ import re
 import json
 import shutil
 import asyncio
+from contextlib import asynccontextmanager
 import threading
 import subprocess
 import logging
@@ -497,10 +498,58 @@ _sync_state: Dict[str, Any] = {
 _sync_lock = threading.Lock()
 _last_saved_session_hash: Optional[str] = None
 
+def normalize_abs_url(url: Optional[str]) -> str:
+    """
+    Normalizes Audiobookshelf server URL:
+    - Trims whitespace and trailing slashes.
+    - If no scheme is provided:
+        - Local IPs / hostnames (localhost, 127.0.0.1, 192.168.*, 10.*, 172.16-31.*) default to http://
+        - Public domain names (e.g. books.raviwarrier.net) default to https://
+    - If scheme is http:// or ws:// but host is a public domain name (e.g. books.raviwarrier.net),
+      automatically upgrades to https:// (or wss://) so reverse proxies / Cloudflare do not force 301 redirects
+      which breaks Python websocket clients.
+    """
+    if not url:
+        return ""
+    clean = str(url).strip().rstrip("/")
+    if not clean or clean.lower() in ("none", "null", "undefined", "false"):
+        return ""
+    if "abs.example.com" in clean:
+        return ""
+
+    if not (clean.startswith("http://") or clean.startswith("https://") or clean.startswith("ws://") or clean.startswith("wss://")):
+        host_part = clean.split("/")[0].split(":")[0].lower()
+        is_local = (
+            host_part in ("localhost", "127.0.0.1", "0.0.0.0", "audiobookshelf", "host.docker.internal")
+            or host_part.startswith("192.168.")
+            or host_part.startswith("10.")
+            or host_part.endswith(".local")
+            or host_part.endswith(".lan")
+        )
+        clean = f"http://{clean}" if is_local else f"https://{clean}"
+
+    if clean.startswith("http://") or clean.startswith("ws://"):
+        scheme = "http://" if clean.startswith("http://") else "ws://"
+        remainder = clean[len(scheme):]
+        host_part = remainder.split("/")[0].split(":")[0].lower()
+        is_local = (
+            host_part in ("localhost", "127.0.0.1", "0.0.0.0", "audiobookshelf", "host.docker.internal")
+            or host_part.startswith("192.168.")
+            or host_part.startswith("10.")
+            or host_part.endswith(".local")
+            or host_part.endswith(".lan")
+        )
+        if not is_local:
+            clean = f"https://{remainder}" if scheme == "http://" else f"wss://{remainder}"
+
+    return clean
+
+
 def save_sync_session(token: str, server_url: str, user_info: Dict[str, Any]):
     """Persists authenticated credentials so background sync runs 24/7 across server reboots."""
     global _last_saved_session_hash
-    session_hash = f"{token}:{server_url}:{user_info.get('id', '')}"
+    clean_server_url = normalize_abs_url(server_url)
+    session_hash = f"{token}:{clean_server_url}:{user_info.get('id', '')}"
     if _last_saved_session_hash == session_hash:
         return  # Avoid redundant SSD writes
 
@@ -508,7 +557,7 @@ def save_sync_session(token: str, server_url: str, user_info: Dict[str, Any]):
         session_file = os.path.join(VOLUME_DIR, ".abs_sync_session.json")
         data = {
             "token": token,
-            "server_url": server_url,
+            "server_url": clean_server_url,
             "user": {
                 "id": str(user_info.get("id", "")),
                 "username": str(user_info.get("username", ""))
@@ -529,7 +578,19 @@ def load_sync_session() -> Optional[Dict[str, Any]]:
         session_file = os.path.join(VOLUME_DIR, ".abs_sync_session.json")
         if os.path.exists(session_file):
             with open(session_file, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+                if isinstance(data, dict):
+                    raw_server = data.get("server_url")
+                    if raw_server:
+                        norm_server = normalize_abs_url(raw_server)
+                        if norm_server and norm_server != raw_server:
+                            data["server_url"] = norm_server
+                            try:
+                                with open(session_file, "w", encoding="utf-8") as fw:
+                                    json.dump(data, fw, indent=2)
+                            except Exception:
+                                pass
+                    return data
     except Exception as e:
         logger.warning(f"Could not load sync session: {e}")
     return None
@@ -691,22 +752,8 @@ def map_container_path_to_host(container_path: str, book_title: Optional[str] = 
 # Templates
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
-# FastAPI App
-app = FastAPI(
-    title="Audiobookshelf Bookmarks Manager",
-    description="Autonomous manager, real-time listener, and automated bookmark audio clipper & transcriber for Audiobookshelf.",
-    version="2.0.0"
-)
-
-# Global session cache so background workers and bookmark extractors have access to authenticated credentials
-_last_authenticated_session: Dict[str, Any] = {
-    "token": None,
-    "user": None,
-    "time": None
-}
-
-@app.on_event("startup")
-async def startup_event():
+@asynccontextmanager
+async def lifespan(app_instance: FastAPI):
     """Start autonomous background bookmark sync daemon and handle Whisper model initialization."""
     if PREWARM_WHISPER:
         def _warmup():
@@ -719,6 +766,22 @@ async def startup_event():
         logger.info(f"Whisper lazy-loading active (max threads: {WHISPER_CPU_THREADS}) - idle CPU stays near 0%.")
     asyncio.create_task(background_bookmark_sync_daemon())
     asyncio.create_task(_socket_listener.start())
+    yield
+
+# FastAPI App
+app = FastAPI(
+    title="Audiobookshelf Bookmarks Manager",
+    description="Autonomous manager, real-time listener, and automated bookmark audio clipper & transcriber for Audiobookshelf.",
+    version="2.0.0",
+    lifespan=lifespan
+)
+
+# Global session cache so background workers and bookmark extractors have access to authenticated credentials
+_last_authenticated_session: Dict[str, Any] = {
+    "token": None,
+    "user": None,
+    "time": None
+}
 
 # Enable CORS so native mobile apps (iOS / Android), WebViews, and external clients can call endpoints directly
 app.add_middleware(
@@ -918,9 +981,7 @@ def resolve_abs_server_url(
     # If ABS_TARGET_SERVER is configured on this host (e.g. 127.0.0.1, localhost, LAN IP, or Docker service),
     # ALWAYS use it as the upstream target. This ensures the sidecar connects directly to Audiobookshelf
     # on the internal network and never loops back through the external reverse proxy.
-    configured = (ABS_TARGET_SERVER or ABS_SERVER_URL or "http://127.0.0.1:13378").strip().rstrip("/")
-    if configured and not (configured.startswith("http://") or configured.startswith("https://")):
-        configured = f"http://{configured}"
+    configured = normalize_abs_url(ABS_TARGET_SERVER or ABS_SERVER_URL or "http://127.0.0.1:13378")
 
     is_internal = any(
         k in configured.lower()
@@ -932,10 +993,9 @@ def resolve_abs_server_url(
     # 2. If ABS_TARGET_SERVER was not an internal address, check explicit client parameters
     explicit = req_url or header_url or query_url
     if explicit:
-        clean_exp = str(explicit).strip().rstrip("/")
-        if clean_exp and not (clean_exp.startswith("http://") or clean_exp.startswith("https://")):
-            clean_exp = f"http://{clean_exp}"
-        return clean_exp
+        clean_exp = normalize_abs_url(explicit)
+        if clean_exp:
+            return clean_exp
 
     return configured or "http://127.0.0.1:13378"
 
@@ -2620,9 +2680,21 @@ class AbsSocketIoListener:
                 await asyncio.sleep(60)
                 continue
 
-            ws_url = server_url.replace("https://", "wss://").replace("http://", "ws://").rstrip("/")
+            server_url = normalize_abs_url(server_url)
+            if server_url.startswith("https://"):
+                ws_url = "wss://" + server_url[len("https://"):].rstrip("/")
+            elif server_url.startswith("http://"):
+                ws_url = "ws://" + server_url[len("http://"):].rstrip("/")
+            elif server_url.startswith("wss://") or server_url.startswith("ws://"):
+                ws_url = server_url.rstrip("/")
+            else:
+                ws_url = f"wss://{server_url.rstrip('/')}"
+
             # Audiobookshelf allows token in query params as well as auth/header
             socket_url = f"{ws_url}/socket.io/?EIO=4&transport=websocket&token={quote_plus(str(token))}"
+
+            origin_protocol = "https://" if ws_url.startswith("wss://") else "http://"
+            origin_host = origin_protocol + ws_url.split("://")[1].split("/")[0]
 
             connect_kwargs = {
                 "ping_interval": None,
@@ -2632,7 +2704,7 @@ class AbsSocketIoListener:
 
             headers_dict = {
                 "Authorization": f"Bearer {token}",
-                "Origin": server_url.rstrip("/"),
+                "Origin": origin_host,
                 "User-Agent": "Audiobookshelf-Bookmarks-Manager/2.0.0",
             }
 

@@ -47,15 +47,30 @@ export function App() {
   
   // Connection and Authentication State
   const savedInitial = typeof window !== 'undefined' ? getStoredCredentials() : null;
+
+  const isLocalOrPlaceholder = (url?: string | null) => {
+    if (!url || typeof url !== 'string') return true;
+    const trimmed = url.trim();
+    return (
+      trimmed === '' ||
+      trimmed === 'http://localhost:13378' ||
+      trimmed === 'http://127.0.0.1:13378' ||
+      trimmed === 'https://localhost:13378' ||
+      trimmed.includes('abs.example.com')
+    );
+  };
+
   const sanitizeInitialServer = (url?: string | null) => {
     if (!url || typeof url !== 'string') return '';
     const trimmed = url.trim();
-    return trimmed.includes('abs.example.com') ? '' : trimmed;
+    if (isLocalOrPlaceholder(trimmed)) return '';
+    return trimmed;
   };
+
   const [user, setUser] = useState<AbsUser | null>(null);
   const [activeToken, setActiveToken] = useState<string | null>(null);
   const [serverUrl, setServerUrl] = useState<string>(
-    sanitizeInitialServer(savedInitial?.serverUrl) || 'http://localhost:13378'
+    sanitizeInitialServer(savedInitial?.serverUrl) || ''
   );
   const [defaultServerUrl, setDefaultServerUrl] = useState<string>('');
   const [sidecarUrl, setSidecarUrl] = useState<string>(savedInitial?.sidecarUrl || getDefaultSidecarUrl());
@@ -304,6 +319,8 @@ export function App() {
           if (detected) {
             initialServer = detected;
             setDefaultServerUrl(detected);
+            setServerUrl((prev) => (!prev || isLocalOrPlaceholder(prev) ? detected : prev));
+            serverUrlRef.current = detected;
           }
           if (cfg.sidecarUrl) {
             initialSidecar = cfg.sidecarUrl;
@@ -320,7 +337,7 @@ export function App() {
 
       // 2. Check if user previously saved credentials on this device
       const saved = getStoredCredentials();
-      const savedServer = saved?.serverUrl && !saved.serverUrl.includes('abs.example.com') ? saved.serverUrl : '';
+      const savedServer = saved?.serverUrl && !isLocalOrPlaceholder(saved.serverUrl) ? saved.serverUrl : '';
       if (saved && (saved.token || (saved.username && saved.password))) {
         try {
           const targetServerToUse = savedServer || initialServer;
@@ -359,7 +376,7 @@ export function App() {
         }
       } else {
         if (!isCancelled && !userRef.current) {
-          setServerUrl((prev) => (!prev || prev === 'http://localhost:13378' || prev.includes('abs.example.com') ? initialServer : prev));
+          setServerUrl((prev) => (!prev || isLocalOrPlaceholder(prev) ? initialServer : prev));
           setSidecarUrl((prev) => (prev.includes('[your ip:port') ? initialSidecar : prev));
           setUseProxy(initialProxy);
           setIsAuthModalOpen(true);

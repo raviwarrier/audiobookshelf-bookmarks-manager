@@ -48,7 +48,7 @@ if [ -f "$ENV_FILE" ]; then
         # Strip surrounding quotes
         val=$(echo "$value" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")
         case "$key" in
-            ABS_TARGET_SERVER|ABS_SERVER_URL) EXISTING_ABS_SERVER="$val" ;;
+            ABS_TARGET_SERVER|ABS_SERVER_URL|DEFAULT_ABS_URL) EXISTING_ABS_SERVER="$val" ;;
             VOLUME_DIR|SNIPPETS_DIR) EXISTING_VOLUME_DIR="$val" ;;
             AUDIOBOOKS_PATH) EXISTING_AUDIOBOOKS_PATH="$val" ;;
             SIDECAR_PORT) EXISTING_SIDECAR_PORT="$val" ;;
@@ -73,6 +73,13 @@ echo -e "   ${YELLOW}Note: 13378 is Audiobookshelf's default port. The manager c
 read -rp "   Target ABS URL [${EXISTING_ABS_SERVER:-http://localhost:13378}]: " INPUT_ABS_SERVER
 ABS_TARGET_SERVER="${INPUT_ABS_SERVER:-${EXISTING_ABS_SERVER:-http://localhost:13378}}"
 ABS_TARGET_SERVER="${ABS_TARGET_SERVER%/}"
+if [[ "$ABS_TARGET_SERVER" != http://* && "$ABS_TARGET_SERVER" != https://* ]]; then
+    if [[ "$ABS_TARGET_SERVER" == localhost* || "$ABS_TARGET_SERVER" == 127.0.0.1* || "$ABS_TARGET_SERVER" == 192.168.* || "$ABS_TARGET_SERVER" == 10.* ]]; then
+        ABS_TARGET_SERVER="http://$ABS_TARGET_SERVER"
+    else
+        ABS_TARGET_SERVER="https://$ABS_TARGET_SERVER"
+    fi
+fi
 
 # 3. Output Bookmarks & Volume Directory
 echo -e "\n${BOLD}2. Output Directory for Bookmarks & Transcripts (VOLUME_DIR)${NC}"

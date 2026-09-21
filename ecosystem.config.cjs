@@ -36,9 +36,34 @@ if (fs.existsSync(envPath)) {
 const DEFAULT_VENV_PYTHON = path.join(APP_DIR, 'venv', 'bin', 'python3');
 const PYTHON_PATH = fs.existsSync(DEFAULT_VENV_PYTHON) ? DEFAULT_VENV_PYTHON : `${APP_DIR}/venv/bin/python3`;
 
+// URL normalizer: ensures public domains default to https:// instead of plaintext http://
+function normalizeUrl(u, fallback = '') {
+  if (!u || typeof u !== 'string') return fallback;
+  let t = u.trim().replace(/\/+$/, '');
+  if (!t || t.includes('abs.example.com')) return fallback;
+  if (!t.startsWith('http://') && !t.startsWith('https://')) {
+    if (t.startsWith('localhost') || t.startsWith('127.0.0.1') || t.startsWith('192.168.') || t.startsWith('10.')) {
+      t = `http://${t}`;
+    } else {
+      t = `https://${t}`;
+    }
+  }
+  if (t.startsWith('http://')) {
+    const host = t.slice(7).split('/')[0].split(':')[0].toLowerCase();
+    const isLocal = ['localhost', '127.0.0.1', '0.0.0.0', 'audiobookshelf', 'host.docker.internal'].includes(host)
+      || host.startsWith('192.168.') || host.startsWith('10.') || host.endsWith('.local') || host.endsWith('.lan');
+    if (!isLocal) {
+      t = `https://${t.slice(7)}`;
+    }
+  }
+  return t;
+}
+
 // Derive target ABS server and sidecar URLs dynamically from .env or fallback
-const ABS_TARGET = (envConfig.ABS_TARGET_SERVER || envConfig.ABS_SERVER_URL || process.env.ABS_TARGET_SERVER || 'http://localhost:13378').trim();
-const DEFAULT_ABS_URL = (envConfig.DEFAULT_ABS_URL || (ABS_TARGET && !ABS_TARGET.includes('abs.example.com') ? ABS_TARGET : 'http://localhost:13378')).trim();
+const rawAbsTarget = envConfig.ABS_TARGET_SERVER || envConfig.ABS_SERVER_URL || process.env.ABS_TARGET_SERVER || '';
+const rawDefaultAbs = envConfig.DEFAULT_ABS_URL || process.env.DEFAULT_ABS_URL || '';
+const ABS_TARGET = normalizeUrl(rawAbsTarget, normalizeUrl(rawDefaultAbs, 'http://localhost:13378'));
+const DEFAULT_ABS_URL = normalizeUrl(rawDefaultAbs, ABS_TARGET);
 const SIDECAR_URL_CONFIG = (envConfig.SIDECAR_URL || process.env.SIDECAR_URL || 'http://localhost:13380').trim();
 const VOLUME_DIR = envConfig.VOLUME_DIR || envConfig.SNIPPETS_DIR || path.join(APP_DIR, 'bookmarks');
 const AUDIOBOOKS_PATH = envConfig.AUDIOBOOKS_PATH || '/srv/ssd/Bookshelf/Audiobooks';

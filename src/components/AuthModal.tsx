@@ -51,20 +51,50 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     ? `http://${clientHost}:13380`
     : 'http://localhost:13380';
 
+  const isLocalOrPlaceholder = (u?: string | null) => {
+    if (!u || typeof u !== 'string') return true;
+    const trimmed = u.trim();
+    return (
+      trimmed === '' ||
+      trimmed === 'http://localhost:13378' ||
+      trimmed === 'http://127.0.0.1:13378' ||
+      trimmed === 'https://localhost:13378' ||
+      trimmed.includes('abs.example.com')
+    );
+  };
+
   const sanitizeUrl = (url?: string | null) => {
     if (!url || typeof url !== 'string') return '';
-    const trimmed = url.trim();
-    return trimmed.includes('abs.example.com') ? '' : trimmed;
+    let trimmed = url.trim().replace(/\/+$/, '');
+    if (trimmed.includes('abs.example.com')) return '';
+    if (trimmed && !trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
+      if (trimmed.startsWith('localhost') || trimmed.startsWith('127.0.0.1') || trimmed.startsWith('192.168.') || trimmed.startsWith('10.')) {
+        trimmed = `http://${trimmed}`;
+      } else {
+        trimmed = `https://${trimmed}`;
+      }
+    }
+    return trimmed;
   };
 
   const savedInitial = typeof window !== 'undefined' ? getStoredCredentials() : null;
-  const initialServerCandidate =
-    sanitizeUrl(savedInitial?.serverUrl) ||
-    sanitizeUrl(currentServerUrl) ||
-    sanitizeUrl(defaultServerUrl) ||
-    'http://localhost:13378';
 
-  const [serverUrl, setServerUrl] = useState(initialServerCandidate);
+  const computeBestServerCandidate = () => {
+    const saved = sanitizeUrl(savedInitial?.serverUrl);
+    const def = sanitizeUrl(defaultServerUrl);
+    const curr = sanitizeUrl(currentServerUrl);
+
+    // 1. If saved credentials has a real, customized server (not dummy localhost), keep it
+    if (saved && !isLocalOrPlaceholder(saved)) return saved;
+    // 2. Prioritize configured server default (e.g. books.raviwarrier.net from ecosystem.config.cjs)
+    if (def && !isLocalOrPlaceholder(def)) return def;
+    // 3. Fallback to current non-placeholder server
+    if (curr && !isLocalOrPlaceholder(curr)) return curr;
+    // 4. Fallback to whatever default or current or localhost
+    return def || curr || saved || 'http://localhost:13378';
+  };
+
+  const [serverUrl, setServerUrl] = useState(computeBestServerCandidate);
   const [rememberCredentials, setRememberCredentials] = useState(savedInitial?.remember ?? true);
   const [sidecarUrl, setSidecarUrl] = useState(
     savedInitial?.sidecarUrl || (currentSidecarUrl && !currentSidecarUrl.includes('[your ip:port') ? currentSidecarUrl : defaultLocalSidecar)
@@ -79,14 +109,38 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [isConnecting, setIsConnecting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
+  // Automatically adopt configured server URL when /api/config loads asynchronously
+  useEffect(() => {
+    if (!defaultServerUrl) return;
+    const cleanDefault = sanitizeUrl(defaultServerUrl);
+    if (!cleanDefault || isLocalOrPlaceholder(cleanDefault)) return;
+
+    setServerUrl((prev) => {
+      // If current input is empty, local, placeholder, or not a custom server, auto-fill with the configured default
+      if (isLocalOrPlaceholder(prev)) {
+        return cleanDefault;
+      }
+      return prev;
+    });
+  }, [defaultServerUrl]);
+
   useEffect(() => {
     if (!isOpen) return;
     const saved = getStoredCredentials();
-    const candidate =
-      sanitizeUrl(saved?.serverUrl) ||
-      sanitizeUrl(currentServerUrl) ||
-      sanitizeUrl(defaultServerUrl) ||
-      'http://localhost:13378';
+    const savedCandidate = sanitizeUrl(saved?.serverUrl);
+    const defCandidate = sanitizeUrl(defaultServerUrl);
+    const currCandidate = sanitizeUrl(currentServerUrl);
+
+    let candidate = '';
+    if (savedCandidate && !isLocalOrPlaceholder(savedCandidate)) {
+      candidate = savedCandidate;
+    } else if (defCandidate && !isLocalOrPlaceholder(defCandidate)) {
+      candidate = defCandidate;
+    } else if (currCandidate && !isLocalOrPlaceholder(currCandidate)) {
+      candidate = currCandidate;
+    } else {
+      candidate = defCandidate || currCandidate || savedCandidate || 'http://localhost:13378';
+    }
 
     if (saved) {
       if (candidate) setServerUrl(candidate);
@@ -106,7 +160,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       setUseProxy(currentUseProxy);
     }
     setErrorMsg(null);
-  }, [isOpen]);
+  }, [isOpen, defaultServerUrl, currentServerUrl]);
 
   if (!isOpen) return null;
 
