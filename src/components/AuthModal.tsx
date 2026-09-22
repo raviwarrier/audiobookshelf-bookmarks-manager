@@ -84,14 +84,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     const def = sanitizeUrl(defaultServerUrl);
     const curr = sanitizeUrl(currentServerUrl);
 
-    // 1. If saved credentials has a real, customized server (not dummy localhost), keep it
-    if (saved && !isLocalOrPlaceholder(saved)) return saved;
-    // 2. Prioritize configured server default (e.g. books.raviwarrier.net from ecosystem.config.cjs)
+    // 1. Prioritize configured server default if set (e.g. books.raviwarrier.net from ecosystem.config.cjs or .env)
     if (def && !isLocalOrPlaceholder(def)) return def;
+    // 2. If saved credentials has a real, customized server (not dummy localhost), keep it
+    if (saved && !isLocalOrPlaceholder(saved)) return saved;
     // 3. Fallback to current non-placeholder server
     if (curr && !isLocalOrPlaceholder(curr)) return curr;
     // 4. Fallback to whatever default or current or localhost
-    return def || curr || saved || 'http://localhost:13378';
+    return def || curr || saved || '';
   };
 
   const [serverUrl, setServerUrl] = useState(computeBestServerCandidate);
@@ -132,14 +132,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     const currCandidate = sanitizeUrl(currentServerUrl);
 
     let candidate = '';
-    if (savedCandidate && !isLocalOrPlaceholder(savedCandidate)) {
-      candidate = savedCandidate;
-    } else if (defCandidate && !isLocalOrPlaceholder(defCandidate)) {
+    if (defCandidate && !isLocalOrPlaceholder(defCandidate)) {
       candidate = defCandidate;
+    } else if (savedCandidate && !isLocalOrPlaceholder(savedCandidate)) {
+      candidate = savedCandidate;
     } else if (currCandidate && !isLocalOrPlaceholder(currCandidate)) {
       candidate = currCandidate;
     } else {
-      candidate = defCandidate || currCandidate || savedCandidate || 'http://localhost:13378';
+      candidate = defCandidate || currCandidate || savedCandidate || '';
     }
 
     if (saved) {

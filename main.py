@@ -2442,9 +2442,9 @@ def run_bookmark_sync_cycle(force_token: Optional[str] = None, force_server: Opt
             for bm in (prog.get("bookmarks") or []):
                 _add_candidate(bm, default_lib_id=lib_id)
 
-        # 3. Active listening sessions
+        # 3. Active listening sessions (optional endpoint; ignore 401/404/timeouts if using API key or if unsupported)
         try:
-            sess_resp = _http_session.get(f"{target_server}/api/me/listening-sessions", headers=headers, timeout=10)
+            sess_resp = _http_session.get(f"{target_server}/api/me/listening-sessions", headers=headers, timeout=5)
             if sess_resp.status_code == 200:
                 s_data = sess_resp.json()
                 s_list = s_data if isinstance(s_data, list) else (s_data.get("sessions") or [])
@@ -2452,8 +2452,10 @@ def run_bookmark_sync_cycle(force_token: Optional[str] = None, force_server: Opt
                     lib_id = s.get("libraryItemId") or s.get("id")
                     for bm in (s.get("bookmarks") or []):
                         _add_candidate(bm, default_lib_id=lib_id)
-        except Exception:
-            pass
+            elif sess_resp.status_code != 401:
+                logger.debug(f"[Auto-Sync] /api/me/listening-sessions returned status {sess_resp.status_code}")
+        except Exception as sess_err:
+            logger.debug(f"[Auto-Sync] Could not query listening sessions: {sess_err}")
 
         _sync_state["skipped_before_cutoff"] = skipped_prior_count
         _sync_state["skipped_tombstoned"] = skipped_tombstone_count
@@ -2785,8 +2787,13 @@ class AbsSocketIoListener:
                                     # Check for auth rejection
                                     if event_name == "auth_failed":
                                         err_detail = payload[1] if len(payload) > 1 else "Invalid or expired token"
-                                        logger.warning(f"[Socket.IO Listener] Authentication rejected by Audiobookshelf: {err_detail}. Re-authenticate via UI.")
+                                        logger.warning(
+                                            f"[Socket.IO Listener] Authentication rejected by Audiobookshelf: {err_detail}. "
+                                            "Note: Audiobookshelf WebSockets require a user session JWT (created via web login) "
+                                            "rather than an API token. Background periodic sync will continue managing bookmarks."
+                                        )
                                         disconnect_reason = "Authentication rejected"
+                                        backoff_seconds = 300.0  # Back off for 5 minutes instead of hammering the socket
                                         break
 
                                     # Events of interest: user updates, bookmarks, progress, sessions, items

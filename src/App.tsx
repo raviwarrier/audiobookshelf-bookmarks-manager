@@ -305,7 +305,7 @@ export function App() {
     let isCancelled = false;
 
     const initializeConnection = async () => {
-      let initialServer = 'http://localhost:13378';
+      let initialServer = '';
       let initialSidecar = getDefaultSidecarUrl();
       let initialProxy = true;
 
@@ -313,9 +313,9 @@ export function App() {
         const res = await fetch('/api/config');
         const cfg = await res.json();
         if (cfg?.ok) {
-          const cfgDefault = cfg.defaultAbsUrl && !cfg.defaultAbsUrl.includes('abs.example.com') ? cfg.defaultAbsUrl : '';
-          const cfgTarget = cfg.absTargetServer && cfg.absTargetServer !== 'http://audiobookshelf:80' && !cfg.absTargetServer.includes('abs.example.com') ? cfg.absTargetServer : '';
-          const detected = cfgDefault || cfgTarget;
+          const cfgDefault = cfg.defaultAbsUrl && !cfg.defaultAbsUrl.includes('abs.example.com') && !isLocalOrPlaceholder(cfg.defaultAbsUrl) ? cfg.defaultAbsUrl : '';
+          const cfgTarget = cfg.absTargetServer && cfg.absTargetServer !== 'http://audiobookshelf:80' && !cfg.absTargetServer.includes('abs.example.com') && !isLocalOrPlaceholder(cfg.absTargetServer) ? cfg.absTargetServer : '';
+          const detected = cfgDefault || cfgTarget || (cfg.defaultAbsUrl && !cfg.defaultAbsUrl.includes('abs.example.com') ? cfg.defaultAbsUrl : '');
           if (detected) {
             initialServer = detected;
             setDefaultServerUrl(detected);
@@ -340,13 +340,15 @@ export function App() {
       const savedServer = saved?.serverUrl && !isLocalOrPlaceholder(saved.serverUrl) ? saved.serverUrl : '';
       if (saved && (saved.token || (saved.username && saved.password))) {
         try {
-          const targetServerToUse = savedServer || initialServer;
+          const targetServerToUse = initialServer || savedServer || '';
           const targetSidecarToUse = saved.sidecarUrl || initialSidecar;
           const proxyToUse = saved.useProxy !== undefined ? saved.useProxy : initialProxy;
           const authModeToUse = saved.token ? 'token' : saved.authMode;
 
-          setServerUrl(targetServerToUse);
-          serverUrlRef.current = targetServerToUse;
+          if (targetServerToUse) {
+            setServerUrl(targetServerToUse);
+            serverUrlRef.current = targetServerToUse;
+          }
           setSidecarUrl(targetSidecarToUse);
           setUseProxy(proxyToUse);
 

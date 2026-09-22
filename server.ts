@@ -460,6 +460,23 @@ async function startServer() {
 
   // System configuration endpoint: provides detected ports & server URLs
   app.get("/api/config", (req, res) => {
+    // Reload latest .env dynamically if present on disk
+    let currentEnv: Record<string, string> = {};
+    try {
+      const candidates = [
+        path.join(process.cwd(), ".env"),
+        "/srv/ssd/Appdata/local/audiobookshelf-bookmarks-manager/.env",
+        "/srv/ssd/Appdata/local/Audiobookshelf-Bookmarks-Manager/.env"
+      ];
+      for (const c of candidates) {
+        if (fs.existsSync(c)) {
+          const parsed = dotenv.parse(fs.readFileSync(c));
+          currentEnv = { ...currentEnv, ...parsed };
+          break;
+        }
+      }
+    } catch {}
+
     const normalizeUrl = (u: string) => {
       if (!u) return "";
       let t = u.trim().replace(/\/+$/, "");
@@ -474,14 +491,20 @@ async function startServer() {
       return t;
     };
 
-    const sidecarPort = process.env.SIDECAR_PORT || 13380;
-    const absServer = normalizeUrl(process.env.ABS_TARGET_SERVER || process.env.ABS_SERVER_URL || "");
-    let defaultAbsUrl = normalizeUrl(process.env.DEFAULT_ABS_URL || process.env.ABS_PUBLIC_URL || "");
+    const sidecarPort = currentEnv.SIDECAR_PORT || process.env.SIDECAR_PORT || 13380;
+    const absServer = normalizeUrl(
+      currentEnv.ABS_TARGET_SERVER || currentEnv.ABS_SERVER_URL || process.env.ABS_TARGET_SERVER || process.env.ABS_SERVER_URL || ""
+    );
+    let defaultAbsUrl = normalizeUrl(
+      currentEnv.DEFAULT_ABS_URL || currentEnv.ABS_PUBLIC_URL || process.env.DEFAULT_ABS_URL || process.env.ABS_PUBLIC_URL || ""
+    );
     if (!defaultAbsUrl) {
       defaultAbsUrl = absServer || "http://localhost:13378";
     }
-    const sidecarUrl = process.env.SIDECAR_URL || `http://localhost:${sidecarPort}`;
-    const useBackendProxy = process.env.USE_BACKEND_PROXY ? process.env.USE_BACKEND_PROXY !== "false" : true;
+    const sidecarUrl = currentEnv.SIDECAR_URL || process.env.SIDECAR_URL || `http://localhost:${sidecarPort}`;
+    const useBackendProxy = (currentEnv.USE_BACKEND_PROXY || process.env.USE_BACKEND_PROXY)
+      ? (currentEnv.USE_BACKEND_PROXY || process.env.USE_BACKEND_PROXY) !== "false"
+      : true;
     res.json({
       ok: true,
       sidecarPort: Number(sidecarPort) || 13380,
