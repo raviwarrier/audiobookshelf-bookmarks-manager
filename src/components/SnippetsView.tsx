@@ -129,7 +129,27 @@ export const SnippetsView: React.FC<SnippetsViewProps> = ({
     try {
       let formattedDate: string | undefined = undefined;
       if (selectedCutoffMode === 'custom_date') {
-        const clean = customDateInput.trim().replace(/[/.]/g, '-');
+        const raw = customDateInput.trim();
+        let clean = raw.replace(/[/.]/g, '-');
+        
+        // Handle MM-DD-YYYY or M-D-YYYY input
+        const mdy = clean.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
+        if (mdy) {
+          const month = mdy[1].padStart(2, '0');
+          const day = mdy[2].padStart(2, '0');
+          const year = mdy[3];
+          clean = `${year}-${month}-${day}`;
+        }
+
+        // Handle YYYY-MM-DD or YYYY-M-D
+        const ymd = clean.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+        if (ymd) {
+          const year = ymd[1];
+          const month = ymd[2].padStart(2, '0');
+          const day = ymd[3].padStart(2, '0');
+          clean = `${year}-${month}-${day}`;
+        }
+
         if (!/^\d{4}-\d{2}-\d{2}$/.test(clean)) {
           throw new Error('Please enter a valid date in YYYY-MM-DD or YYYY/MM/DD format.');
         }

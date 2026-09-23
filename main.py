@@ -2746,8 +2746,9 @@ class AbsSocketIoListener:
                     # 2. Send Socket.IO CONNECT packet to '/' namespace (packet '40')
                     await ws.send("40")
 
-                    # 3. Emit Audiobookshelf 'auth' event (packet '42["auth","<token>"]')
-                    await ws.send(f'42["auth","{token}"]')
+                    # 3. Emit Audiobookshelf 'auth' event (packet '42["auth", "<token>"]')
+                    token_json = json.dumps(str(token))
+                    await ws.send(f'42["auth",{token_json}]')
                     logger.info("[Socket.IO Listener] Handshake complete and auth event emitted.")
 
                     # Message listening loop
@@ -2776,6 +2777,20 @@ class AbsSocketIoListener:
                         elif msg.startswith("2"):
                             await ws.send("3" + msg[1:])
                             continue
+                        elif msg == "3" or msg.startswith("3"):
+                            # Engine.IO pong response or heartbeat ACK
+                            continue
+
+                        # Socket.IO CONNECT ACK ('40')
+                        if msg.startswith("40"):
+                            logger.debug(f"[Socket.IO Listener] Socket.IO namespace connected: {msg[:60]}")
+                            continue
+
+                        # Socket.IO DISCONNECT or CONNECT_ERROR ('41' and '44')
+                        if msg.startswith("41") or msg.startswith("44"):
+                            disconnect_reason = f"Socket.IO connection rejected or closed by server: {msg[:80]}"
+                            logger.warning(f"[Socket.IO Listener] {disconnect_reason}")
+                            break
 
                         # Socket.IO event: starts with '42'
                         if msg.startswith("42"):
@@ -2783,6 +2798,11 @@ class AbsSocketIoListener:
                                 payload = json.loads(msg[2:])
                                 if isinstance(payload, list) and len(payload) > 0:
                                     event_name = str(payload[0]).lower()
+
+                                    # Check for auth success
+                                    if event_name in ["authenticated", "init", "user_online"]:
+                                        logger.info(f"[Socket.IO Listener] Audiobookshelf session verified ({event_name}).")
+                                        backoff_seconds = 5.0
 
                                     # Check for auth rejection
                                     if event_name == "auth_failed":
