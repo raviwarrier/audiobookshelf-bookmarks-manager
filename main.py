@@ -1252,6 +1252,23 @@ async def extract_token_flexible(
     raise HTTPException(status_code=401, detail="Authorization token required (via Bearer header, X-ABS-Token, or ?token= query parameter)")
 
 
+async def extract_token_optional(
+    request: Request,
+    authorization: Optional[str] = Header(None),
+    x_abs_token: Optional[str] = Header(None, alias="x-abs-token"),
+    token: Optional[str] = Query(None),
+    api_key: Optional[str] = Query(None, alias="apiKey")
+) -> Optional[str]:
+    """
+    Optional token extractor that does not throw 401 when omitted.
+    Used for local admin endpoints like configuring cutoff period.
+    """
+    try:
+        return await extract_token_flexible(request, authorization, x_abs_token, token, api_key)
+    except HTTPException:
+        return None
+
+
 class SnippetRequest(BaseModel):
     """
     Flexible request payload for audio extraction and transcription.
@@ -3254,13 +3271,13 @@ async def get_cutoff_configuration():
 async def update_cutoff_configuration(
     payload: CutoffConfigRequest,
     request: Request,
-    raw_token: Optional[str] = Depends(extract_token_flexible)
+    raw_token: Optional[str] = Depends(extract_token_optional)
 ):
     """
     Allows the admin to configure the bookmark cutoff period.
     Three options:
     1. 'from_start': Processes all bookmarks from the beginning of server history.
-    2. 'custom_date': Processes bookmarks on or after YYYY/MM/DD or YYYY-MM-DD.
+    2. 'custom_date': Processes bookmarks on or after YYYY/MM/DD, YY/MM/DD, or YYYY-MM-DD.
     3. 'from_now': Processes bookmarks from current installation date (or resets to now).
     """
     mode = (payload.cutoff_mode or "from_now").strip().lower()
@@ -3285,18 +3302,26 @@ async def update_cutoff_configuration(
         if not raw_d:
             raise HTTPException(status_code=400, detail="custom_date is required when cutoff_mode is 'custom_date'.")
         
-        # Standardize date separators (supports YYYY/MM/DD, YYYY.MM.DD, or YYYY-MM-DD)
-        clean_d = re.sub(r'[/.]', '-', raw_d)[:10]
+        # Standardize date separators (supports YYYY/MM/DD, YY/MM/DD, YYYY.MM.DD, or YYYY-MM-DD)
+        clean_d = re.sub(r'[/.]', '-', raw_d)
+        m_yy = re.match(r'^(\d{2})-(\d{1,2})-(\d{1,2})$', clean_d)
+        if m_yy:
+            clean_d = f"20{m_yy.group(1)}-{int(m_yy.group(2)):02d}-{int(m_yy.group(3)):02d}"
+        else:
+            m_yyyy = re.match(r'^(\d{4})-(\d{1,2})-(\d{1,2})$', clean_d)
+            if m_yyyy:
+                clean_d = f"{m_yyyy.group(1)}-{int(m_yyyy.group(2)):02d}-{int(m_yyyy.group(3)):02d}"
+
         try:
-            dt_obj = datetime.strptime(clean_d, "%Y-%m-%d")
+            dt_obj = datetime.strptime(clean_d[:10], "%Y-%m-%d")
         except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid custom_date format. Please use YYYY-MM-DD or YYYY/MM/DD.")
+            raise HTTPException(status_code=400, detail="Invalid custom_date format. Please use YYYY/MM/DD, YY/MM/DD, or YYYY-MM-DD.")
 
         cutoff_dt = datetime(dt_obj.year, dt_obj.month, dt_obj.day, 0, 0, 0)
-        updated_config["custom_date"] = clean_d
-        updated_config["cutoff_datetime"] = f"{clean_d}T00:00:00"
+        updated_config["custom_date"] = dt_obj.strftime("%Y-%m-%d")
+        updated_config["cutoff_datetime"] = f"{dt_obj.strftime('%Y-%m-%d')}T00:00:00"
         updated_config["cutoff_timestamp"] = cutoff_dt.timestamp()
-        updated_config["note"] = f"Extracting bookmarks created on or after {clean_d} at 00:00."
+        updated_config["note"] = f"Extracting bookmarks created on or after {dt_obj.strftime('%Y-%m-%d')} at 00:00."
 
     elif mode == "from_now":
         # Uses installation date or resets to system date

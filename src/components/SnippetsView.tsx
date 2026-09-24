@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Search, 
   Download, 
@@ -97,12 +97,59 @@ export const SnippetsView: React.FC<SnippetsViewProps> = ({
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
 
   // Cutoff Period Configuration State
+  const nativeDatePickerRef = useRef<HTMLInputElement>(null);
   const [isCutoffModalOpen, setIsCutoffModalOpen] = useState<boolean>(false);
   const [selectedCutoffMode, setSelectedCutoffMode] = useState<CutoffMode>(
     syncState?.cutoff_mode || 'from_now'
   );
-  const [customDateInput, setCustomDateInput] = useState<string>(
-    syncState?.custom_cutoff_date || syncState?.installation_date || new Date().toISOString().slice(0, 10)
+
+  const formatToSlashDate = (raw?: string | null): string => {
+    if (!raw) return '';
+    const trimmed = raw.trim();
+    const clean = trimmed.replace(/[-.]/g, '/');
+    const m = clean.match(/^(\d{2,4})\/(\d{1,2})\/(\d{1,2})/);
+    if (m) {
+      let year = m[1];
+      if (year.length === 2) {
+        year = `20${year}`;
+      }
+      const month = m[2].padStart(2, '0');
+      const day = m[3].padStart(2, '0');
+      return `${year}/${month}/${day}`;
+    }
+    return trimmed;
+  };
+
+  const normalizeToIsoDate = (raw: string): string => {
+    const trimmed = raw.trim();
+    const clean = trimmed.replace(/[/.]/g, '-');
+    const ymd = clean.match(/^(\d{2,4})-(\d{1,2})-(\d{1,2})$/);
+    if (ymd) {
+      let year = ymd[1];
+      if (year.length === 2) {
+        year = `20${year}`;
+      }
+      const month = ymd[2].padStart(2, '0');
+      const day = ymd[3].padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    }
+    const mdy = clean.match(/^(\d{1,2})-(\d{1,2})-(\d{2,4})$/);
+    if (mdy) {
+      let year = mdy[3];
+      if (year.length === 2) {
+        year = `20${year}`;
+      }
+      const month = mdy[1].padStart(2, '0');
+      const day = mdy[2].padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    }
+    return clean;
+  };
+
+  const [customDateInput, setCustomDateInput] = useState<string>(() =>
+    formatToSlashDate(
+      syncState?.custom_cutoff_date || syncState?.installation_date || new Date().toISOString().slice(0, 10)
+    )
   );
   const [isSavingCutoff, setIsSavingCutoff] = useState<boolean>(false);
   const [cutoffSaveError, setCutoffSaveError] = useState<string | null>(null);
@@ -114,9 +161,9 @@ export const SnippetsView: React.FC<SnippetsViewProps> = ({
       setSelectedCutoffMode(syncState.cutoff_mode);
     }
     if (syncState?.custom_cutoff_date) {
-      setCustomDateInput(syncState.custom_cutoff_date);
-    } else if (syncState?.installation_date && !customDateInput) {
-      setCustomDateInput(syncState.installation_date);
+      setCustomDateInput(formatToSlashDate(syncState.custom_cutoff_date));
+    } else if (syncState?.installation_date) {
+      setCustomDateInput((prev) => prev || formatToSlashDate(syncState.installation_date));
     }
   }, [syncState?.cutoff_mode, syncState?.custom_cutoff_date, syncState?.installation_date]);
 
@@ -129,31 +176,15 @@ export const SnippetsView: React.FC<SnippetsViewProps> = ({
     try {
       let formattedDate: string | undefined = undefined;
       if (selectedCutoffMode === 'custom_date') {
-        const raw = customDateInput.trim();
-        let clean = raw.replace(/[/.]/g, '-');
-        
-        // Handle MM-DD-YYYY or M-D-YYYY input
-        const mdy = clean.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
-        if (mdy) {
-          const month = mdy[1].padStart(2, '0');
-          const day = mdy[2].padStart(2, '0');
-          const year = mdy[3];
-          clean = `${year}-${month}-${day}`;
+        const iso = normalizeToIsoDate(customDateInput);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) {
+          throw new Error('Please enter a valid date in yyyy/mm/dd (e.g. 2026/09/24 or 26/09/24).');
         }
-
-        // Handle YYYY-MM-DD or YYYY-M-D
-        const ymd = clean.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
-        if (ymd) {
-          const year = ymd[1];
-          const month = ymd[2].padStart(2, '0');
-          const day = ymd[3].padStart(2, '0');
-          clean = `${year}-${month}-${day}`;
+        const d = new Date(iso);
+        if (isNaN(d.getTime())) {
+          throw new Error('Invalid calendar date specified.');
         }
-
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(clean)) {
-          throw new Error('Please enter a valid date in YYYY-MM-DD or YYYY/MM/DD format.');
-        }
-        formattedDate = clean;
+        formattedDate = iso;
       }
 
       const payload = {
@@ -161,44 +192,89 @@ export const SnippetsView: React.FC<SnippetsViewProps> = ({
         custom_date: formattedDate
       };
 
-      const endpoint = `${sidecarUrl.replace(/\/+$/, '')}/api/cutoff-config`;
       let data: any = null;
+      let lastErrMsg = '';
 
-      if (useProxy) {
-        const res = await fetch('/api/proxy/abs', {
+      // 1. First attempt: Direct local API endpoint on the web dashboard
+      // (Bypasses remote WAN NAT loopback and communicates directly with the sidecar)
+      try {
+        const localRes = await fetch('/api/cutoff-config', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            targetUrl: endpoint,
+          headers: {
+            'Content-Type': 'application/json',
+            ...(activeToken ? { 'Authorization': `Bearer ${activeToken}` } : {}),
+            ...(serverUrl ? { 'X-ABS-Server-Url': serverUrl } : {}),
+          },
+          body: JSON.stringify(payload)
+        });
+        const rawText = await localRes.text();
+        let parsed: any = null;
+        try {
+          parsed = JSON.parse(rawText);
+        } catch {}
+
+        if (localRes.ok && parsed && (parsed.status === 'success' || parsed.config)) {
+          data = parsed;
+        } else if (parsed?.detail || parsed?.error) {
+          lastErrMsg = parsed.detail || parsed.error;
+        }
+      } catch (localErr) {
+        console.warn('Local /api/cutoff-config call notice:', localErr);
+      }
+
+      // 2. Fallback attempt: If local route was not reached, route via sidecar proxy or endpoint
+      if (!data) {
+        const endpoint = `${sidecarUrl.replace(/\/+$/, '')}/api/cutoff-config`;
+        if (useProxy) {
+          const res = await fetch('/api/proxy/abs', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              targetUrl: endpoint,
+              method: 'POST',
+              headers: {
+                'Authorization': activeToken ? `Bearer ${activeToken}` : '',
+                'X-ABS-Server-Url': serverUrl,
+                'Content-Type': 'application/json'
+              },
+              body: payload
+            })
+          });
+          const rawText = await res.text();
+          let json: any = null;
+          try {
+            json = JSON.parse(rawText);
+          } catch {}
+
+          if (res.ok && json && (json.ok || json.status === 'success' || json.data)) {
+            data = json.data || json;
+          } else {
+            const err = json?.error || json?.message || json?.data?.detail || lastErrMsg || `Failed with status ${res.status}`;
+            throw new Error(typeof err === 'string' ? err : 'Failed to update cutoff configuration');
+          }
+        } else {
+          const res = await fetch(endpoint, {
             method: 'POST',
             headers: {
               'Authorization': activeToken ? `Bearer ${activeToken}` : '',
               'X-ABS-Server-Url': serverUrl,
               'Content-Type': 'application/json'
             },
-            body: payload
-          })
-        });
-        const json = await res.json();
-        if (!res.ok || !json.ok) {
-          throw new Error(json.error || json.data?.detail || 'Failed to update cutoff configuration');
+            body: JSON.stringify(payload)
+          });
+          const rawText = await res.text();
+          let json: any = null;
+          try {
+            json = JSON.parse(rawText);
+          } catch {}
+
+          if (res.ok && json) {
+            data = json;
+          } else {
+            const err = json?.detail || json?.error || lastErrMsg || `Failed with status ${res.status}`;
+            throw new Error(typeof err === 'string' ? err : 'Failed to update cutoff configuration');
+          }
         }
-        data = json.data;
-      } else {
-        const res = await fetch(endpoint, {
-          method: 'POST',
-          headers: {
-            'Authorization': activeToken ? `Bearer ${activeToken}` : '',
-            'X-ABS-Server-Url': serverUrl,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(payload)
-        });
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({}));
-          throw new Error(err.detail || err.error || `Failed with status ${res.status}`);
-        }
-        data = await res.json();
       }
 
       setCutoffSaveSuccess('Cutoff period updated successfully!');
@@ -1297,13 +1373,46 @@ export const SnippetsView: React.FC<SnippetsViewProps> = ({
 
                     {selectedCutoffMode === 'custom_date' && (
                       <div className="pt-1">
-                        <input
-                          type="date"
-                          value={customDateInput}
-                          onChange={(e) => setCustomDateInput(e.target.value)}
-                          max={new Date().toISOString().slice(0, 10)}
-                          className="w-full bg-[#1e1e1e] border border-neutral-700 focus:border-neutral-300 text-white px-2.5 py-1.5 text-xs font-mono outline-none"
-                        />
+                        <div className="relative flex items-center">
+                          <input
+                            type="text"
+                            value={customDateInput}
+                            onChange={(e) => setCustomDateInput(e.target.value)}
+                            placeholder="yyyy/mm/dd"
+                            className="w-full bg-[#1e1e1e] border border-neutral-700 focus:border-neutral-300 text-white px-2.5 py-1.5 text-xs font-mono outline-none pr-9 tracking-wider"
+                          />
+                          <input
+                            type="date"
+                            ref={nativeDatePickerRef}
+                            className="sr-only"
+                            tabIndex={-1}
+                            value={normalizeToIsoDate(customDateInput)}
+                            max={new Date().toISOString().slice(0, 10)}
+                            onChange={(e) => {
+                              if (e.target.value) {
+                                setCustomDateInput(formatToSlashDate(e.target.value));
+                              }
+                            }}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              try {
+                                nativeDatePickerRef.current?.showPicker();
+                              } catch {
+                                nativeDatePickerRef.current?.focus();
+                              }
+                            }}
+                            className="absolute right-2 p-1 text-neutral-400 hover:text-white transition-colors"
+                            title="Open calendar picker"
+                          >
+                            <Calendar className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                        <div className="flex items-center justify-between text-[10px] text-neutral-400 mt-1 px-0.5">
+                          <span>Format: <strong className="text-neutral-300 font-mono">yyyy/mm/dd</strong> or <strong className="text-neutral-300 font-mono">yy/mm/dd</strong></span>
+                          <span className="text-neutral-500">Pick from calendar or type</span>
+                        </div>
                       </div>
                     )}
                   </div>

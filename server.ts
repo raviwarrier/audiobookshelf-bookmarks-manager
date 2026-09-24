@@ -212,7 +212,7 @@ function ensureInstallationDateConfig(): { installation_date: string; cutoff_dat
 
 async function startServer() {
   // Ensure installation_date.json exists before app start, without overwriting on updates
-  const installationConfig = ensureInstallationDateConfig();
+  let installationConfig = ensureInstallationDateConfig();
 
   const app = express();
 
@@ -247,9 +247,25 @@ async function startServer() {
       }
 
       // Ensure valid URL
-      const parsedUrl = new URL(cleanTargetUrl);
+      let parsedUrl = new URL(cleanTargetUrl);
       if (!["http:", "https:"].includes(parsedUrl.protocol)) {
         return res.status(400).json({ error: "Invalid protocol. Only http and https are allowed." });
+      }
+
+      // Automatic sidecar loopback resolver:
+      // If the target URL points to port 13380 or standard sidecar endpoints (cutoff-config,
+      // user bookmarks, etc.), route directly to local sidecar at 127.0.0.1 without going out to WAN.
+      const sidecarPort = process.env.SIDECAR_PORT || "13380";
+      const isSidecarTarget =
+        parsedUrl.port === sidecarPort ||
+        parsedUrl.pathname.startsWith("/api/cutoff-config") ||
+        parsedUrl.pathname.startsWith("/api/installation-date") ||
+        parsedUrl.pathname.startsWith("/api/user/bookmarks") ||
+        parsedUrl.pathname.startsWith("/api/user/sync") ||
+        parsedUrl.pathname.startsWith("/api/sync");
+
+      if (isSidecarTarget) {
+        cleanTargetUrl = `http://127.0.0.1:${sidecarPort}${parsedUrl.pathname}${parsedUrl.search}`;
       }
 
       // Sanitize headers: remove hop-by-hop headers and host to avoid breaking upstream SNI/CORS
@@ -431,17 +447,73 @@ async function startServer() {
       const forwardHeaders: Record<string, string> = {};
       if (req.headers.authorization) forwardHeaders["authorization"] = req.headers.authorization;
       if (req.headers["x-abs-server-url"]) forwardHeaders["x-abs-server-url"] = req.headers["x-abs-server-url"] as string;
-      if (req.headers["content-type"]) forwardHeaders["content-type"] = req.headers["content-type"] as string;
+      forwardHeaders["content-type"] = (req.headers["content-type"] as string) || "application/json";
 
       const sidecarRes = await fetch(targetUrl, {
         method: req.method,
         headers: forwardHeaders,
         body: ["POST", "PUT"].includes(req.method) ? JSON.stringify(req.body) : undefined,
       });
-      const data = await sidecarRes.json();
+      const rawText = await sidecarRes.text();
+      let data: any = null;
+      try {
+        data = JSON.parse(rawText);
+      } catch {
+        data = { message: rawText };
+      }
+
+      // If updating cutoff configuration, keep in-memory cache synchronized
+      if (req.originalUrl.includes("cutoff-config") && req.method === "POST" && data?.config) {
+        installationConfig = data.config;
+      }
+
       res.status(sidecarRes.status).json(data);
     } catch (err: unknown) {
-      // If the sidecar is temporarily starting or offline and the client requests installation-date or cutoff-config, return cached config
+      // If the sidecar is temporarily starting, restarting, or offline
+      if (req.originalUrl.includes("cutoff-config") && req.method === "POST") {
+        try {
+          const body = req.body || {};
+          const mode = body.cutoff_mode || "from_now";
+          const customDate = body.custom_date;
+          const cfgTargets = [
+            path.join(process.cwd(), "installation_date.json"),
+            path.join(process.env.VOLUME_DIR || path.join(process.cwd(), "bookmarks"), "installation_date.json")
+          ];
+          const cfg: any = { ...installationConfig, cutoff_mode: mode };
+          if (mode === "from_start") {
+            cfg.cutoff_timestamp = 0;
+            cfg.cutoff_datetime = "1970-01-01T00:00:00";
+            cfg.custom_date = null;
+          } else if (mode === "custom_date" && customDate) {
+            cfg.custom_date = customDate;
+            cfg.cutoff_datetime = `${customDate}T00:00:00`;
+            cfg.cutoff_timestamp = new Date(customDate).getTime() / 1000;
+          } else if (mode === "from_now") {
+            cfg.custom_date = null;
+            cfg.cutoff_datetime = `${cfg.installation_date || new Date().toISOString().slice(0, 10)}T00:00:00`;
+            cfg.cutoff_timestamp = new Date(cfg.installation_date || new Date()).getTime() / 1000;
+          }
+          for (const t of cfgTargets) {
+            try {
+              fs.writeFileSync(t, JSON.stringify(cfg, null, 2), "utf-8");
+            } catch {}
+          }
+          installationConfig = cfg as any;
+          return res.json({
+            status: "success",
+            cutoff_mode: mode,
+            custom_date: cfg.custom_date,
+            installation_date: cfg.installation_date,
+            cutoff_datetime: cfg.cutoff_datetime,
+            cutoff_timestamp: cfg.cutoff_timestamp,
+            config: cfg,
+            source: "saved_to_disk",
+          });
+        } catch (saveErr) {
+          console.warn("Direct cutoff save notice:", saveErr);
+        }
+      }
+
       if (req.originalUrl.includes("installation-date") || req.originalUrl.includes("cutoff-config")) {
         return res.json({
           status: "success",
