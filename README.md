@@ -254,7 +254,7 @@ curl -O -J -L "http://localhost:13380/api/export-book?book_title=Project%20Hail%
 
 ## ⚡ Vibe Coding Disclaimer
 
-This project was built largely through **vibe coding**—a modern development workflow leveraging conversational AI and prompt-driven engineering alongside human architecture, iterative testing, and real-world debugging.
+This project was built completely through **vibe coding** using Google AI Studio.
 
 ### What that means for you:
 - **Built for Real Use, But Test First**: While this application is designed thoughtfully, includes safety mechanisms (ephemeral in-memory credential encryption, non-blocking asynchronous sync loops, CPU-throttled transcription workers, and immutable installation cutoffs), and is actively tested in live Audiobookshelf environments, it was produced rapidly through AI-assisted iteration.
