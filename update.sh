@@ -77,6 +77,10 @@ echo -e "   ${GREEN}✓ Python packages installed successfully in venv.${NC}"
 
 # 3. Node Dependencies & Production Build
 echo -e "\n${BLUE}[3/4] Building Web Dashboard & Server Bundle...${NC}"
+if [ -f "$SCRIPT_DIR/.env" ]; then
+    # Vite warns if NODE_ENV is set in .env; production environment is managed by PM2/runtime
+    sed -i '/^NODE_ENV=/d' "$SCRIPT_DIR/.env" 2>/dev/null || true
+fi
 if command -v npm &>/dev/null; then
     npm install
     npm run build

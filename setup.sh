@@ -186,9 +186,8 @@ WHISPER_DEVICE=cpu
 WHISPER_COMPUTE_TYPE=int8
 VOSK_MODEL_NAME=vosk-model-small-en-us-0.15
 
-# Development / Runtime Flags
+# Runtime Flags
 RELOAD=false
-NODE_ENV=production
 EOF
 
 chmod 600 "$ENV_FILE"

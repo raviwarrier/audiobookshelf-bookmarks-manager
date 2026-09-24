@@ -220,7 +220,8 @@ async function startServer() {
   // - In AI Studio container dev server, MUST bind to 3000 for ingress proxy routing.
   // - In production (bundled dist/server.cjs or PM2), default to 13379 or process.env.PORT.
   const isBundled = typeof __filename === "string" && __filename.endsWith(".cjs");
-  const PORT = (process.env.NODE_ENV === "production" || isBundled)
+  const isProduction = process.env.NODE_ENV === "production" || isBundled;
+  const PORT = isProduction
     ? (Number(process.env.PORT) || 13379)
     : 3000;
 
@@ -521,8 +522,8 @@ async function startServer() {
     res.json({ status: "ok" });
   });
 
-  // Vite middleware for development
-  if (process.env.NODE_ENV !== "production") {
+  // Vite middleware for development vs static production build
+  if (!isProduction) {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
