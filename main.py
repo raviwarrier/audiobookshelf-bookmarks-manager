@@ -807,7 +807,7 @@ async def lifespan(app_instance: FastAPI):
 app = FastAPI(
     title="Audiobookshelf Bookmarks Manager",
     description="Autonomous manager, real-time listener, and automated bookmark audio clipper & transcriber for Audiobookshelf.",
-    version="2.0.0",
+    version="2.1.0",
     lifespan=lifespan
 )
 
@@ -2806,7 +2806,7 @@ class AbsSocketIoListener:
             headers_dict = {
                 "Authorization": f"Bearer {token}",
                 "Origin": origin_host,
-                "User-Agent": "Audiobookshelf-Bookmarks-Manager/2.0.0",
+                "User-Agent": "Audiobookshelf-Bookmarks-Manager/2.1.0",
             }
 
             connected_at = 0.0
@@ -2985,6 +2985,7 @@ async def trigger_bookmark_sync(
     """
     Triggers an immediate background sync check for the user's bookmarks across Audiobookshelf.
     Extracts and transcribes any newly detected bookmarks without requiring reverse proxy changes.
+    Dispatches task asynchronously so the HTTP request never blocks or times out.
     """
     server_url = resolve_abs_server_url(
         header_url=request.headers.get("X-ABS-Server-Url") or request.headers.get("X-Server-Url") or request.headers.get("X-ABS-URL"),
@@ -2992,8 +2993,31 @@ async def trigger_bookmark_sync(
     )
     if "_socket_listener" in globals() and _socket_listener is not None:
         _socket_listener.wake()
-    result = await asyncio.to_thread(run_bookmark_sync_cycle, force_token=raw_token, force_server=server_url)
-    return result
+
+    wait_for_completion = request.query_params.get("wait", "").lower() in ("true", "1", "yes")
+
+    if wait_for_completion:
+        result = await asyncio.to_thread(run_bookmark_sync_cycle, force_token=raw_token, force_server=server_url)
+        return result
+
+    with _sync_lock:
+        already_syncing = _sync_state.get("is_syncing", False)
+
+    if already_syncing:
+        return {
+            "status": "in_progress",
+            "message": "A sync cycle is already currently running.",
+            "current_item": _sync_state.get("current_item")
+        }
+
+    # Dispatch sync cycle in background thread so HTTP response returns immediately without timing out
+    asyncio.create_task(asyncio.to_thread(run_bookmark_sync_cycle, force_token=raw_token, force_server=server_url))
+
+    return {
+        "status": "started",
+        "message": "Bookmark sync cycle initiated in background.",
+        "state": _sync_state
+    }
 
 
 @app.get("/api/user/sync-status")
@@ -4010,7 +4034,7 @@ async def health_check():
         "status": "healthy",
         "service": "Audiobookshelf Bookmarks Manager",
         "tagline": "Autonomous manager and sidecar for Audiobookshelf with real-time Socket.IO listener & automated bookmark clipping",
-        "version": "2.0.0",
+        "version": "2.1.0",
         "architecture_mode": "Zero-Proxy Event-Driven Sidecar (Port 13380)",
         "abs_target_server": ABS_TARGET_SERVER,
         "volume_dir": VOLUME_DIR,

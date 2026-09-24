@@ -444,7 +444,12 @@ export function App() {
         }
 
         if (statusData && statusData.sync_state) {
+          const wasSyncing = syncState?.is_syncing;
           setSyncState(statusData.sync_state);
+          // If sync just completed, refresh the snippet list immediately
+          if (wasSyncing && !statusData.sync_state.is_syncing) {
+            await syncUserBookmarks(sidecarUrl, activeToken, user.username, useProxy);
+          }
         }
 
         if (statusData && Array.isArray(statusData.recent) && statusData.recent.length > 0) {
@@ -741,7 +746,7 @@ export function App() {
       <footer className="border-t border-neutral-900 px-6 py-4 text-center text-xs text-neutral-600 font-mono flex items-center justify-center gap-2">
         <span>Audiobookshelf Bookmarks Manager</span>
         <span>•</span>
-        <span className="text-neutral-500">v2.0.0</span>
+        <span className="text-neutral-500">v2.1.0</span>
       </footer>
     </div>
   );

@@ -254,7 +254,8 @@ async function startServer() {
 
       // Automatic sidecar loopback resolver:
       // If the target URL points to port 13380 or standard sidecar endpoints (cutoff-config,
-      // user bookmarks, etc.), route directly to local sidecar at 127.0.0.1 without going out to WAN.
+      // user bookmarks, etc.), route directly to local sidecar without going out to WAN.
+      const sidecarBase = (process.env.SIDECAR_URL || `http://127.0.0.1:${process.env.SIDECAR_PORT || 13380}`).replace(/\/+$/, "");
       const sidecarPort = process.env.SIDECAR_PORT || "13380";
       const isSidecarTarget =
         parsedUrl.port === sidecarPort ||
@@ -267,7 +268,7 @@ async function startServer() {
         parsedUrl.pathname.startsWith("/api/user/snippet");
 
       if (isSidecarTarget) {
-        cleanTargetUrl = `http://127.0.0.1:${sidecarPort}${parsedUrl.pathname}${parsedUrl.search}`;
+        cleanTargetUrl = `${sidecarBase}${parsedUrl.pathname}${parsedUrl.search}`;
       }
 
       // Sanitize headers: remove hop-by-hop headers and host to avoid breaking upstream SNI/CORS
@@ -280,7 +281,7 @@ async function startServer() {
           }
         }
       }
-      safeHeaders["User-Agent"] = safeHeaders["User-Agent"] || "Audiobookshelf-Bookmarks-Manager/2.0";
+      safeHeaders["User-Agent"] = safeHeaders["User-Agent"] || "Audiobookshelf-Bookmarks-Manager/2.1.0";
       safeHeaders["Accept"] = safeHeaders["Accept"] || "*/*";
 
       let requestBody: string | undefined = undefined;

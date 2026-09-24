@@ -1,6 +1,6 @@
 # Audiobookshelf Bookmarks Manager
 
-**Version 2.0 (Zero-Proxy Event-Driven Architecture)**  
+**Version 2.1.0 (Zero-Proxy Event-Driven Architecture)**  
 Automated bookmark audio clipper, Whisper speech-to-text transcriber, and web dashboard for [Audiobookshelf](https://www.audiobookshelf.org/).
 
 GitHub: [https://github.com/raviwarrier/audiobookshelf-bookmarks-manager](https://github.com/raviwarrier/audiobookshelf-bookmarks-manager)
@@ -214,7 +214,7 @@ Response:
 {
   "status": "healthy",
   "service": "Audiobookshelf Bookmarks Manager",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "architecture_mode": "Zero-Proxy Event-Driven Sidecar (Port 13380)",
   "abs_target_server": "http://192.168.68.102:13378"
 }

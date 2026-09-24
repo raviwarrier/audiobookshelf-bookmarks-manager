@@ -898,7 +898,7 @@ export const SnippetsView: React.FC<SnippetsViewProps> = ({
                 ? 'bg-neutral-200 text-black border-neutral-200 font-semibold shadow-sm'
                 : 'bg-[#141414] text-neutral-300 border-neutral-700 hover:border-neutral-500 hover:text-white cursor-pointer'
             }`}
-            title="Show all snippets from all books"
+            title={`Show all snippets across all ${uniqueBooks.length} books`}
           >
             <span>All Books</span>
             <span
@@ -908,7 +908,7 @@ export const SnippetsView: React.FC<SnippetsViewProps> = ({
                   : 'bg-neutral-800 text-neutral-400'
               }`}
             >
-              {snippets.length}
+              {uniqueBooks.length}
             </span>
           </button>
 

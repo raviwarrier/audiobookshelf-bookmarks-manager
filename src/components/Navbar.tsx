@@ -41,7 +41,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               Audiobookshelf Bookmarks Manager
             </h1>
             <span className="text-[10px] font-mono px-1.5 py-0.5 bg-neutral-800 text-neutral-400 border border-neutral-700">
-              v2.0.0
+              v2.1.0
             </span>
           </div>
         </div>
