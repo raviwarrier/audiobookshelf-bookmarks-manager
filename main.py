@@ -127,7 +127,6 @@ AUTO_SYNC_BOOKMARKS = os.environ.get("AUTO_SYNC_BOOKMARKS", "true").lower() in (
 # Default sync interval is 120s (2 minutes) to prevent constant SSD I/O and CPU churn
 BOOKMARK_SYNC_INTERVAL = int(os.environ.get("BOOKMARK_SYNC_INTERVAL", os.environ.get("SYNC_INTERVAL", "120")))
 TOKEN_CACHE_TTL = int(os.environ.get("TOKEN_CACHE_TTL", "60"))
-ABS_API_TOKEN = os.environ.get("ABS_API_TOKEN", os.environ.get("ABS_TOKEN", "")).strip()
 
 # ==============================================================================
 # Immutable Installation Date & Bookmark Sync Cutoff Configuration
@@ -594,6 +593,24 @@ def load_sync_session() -> Optional[Dict[str, Any]]:
     except Exception as e:
         logger.warning(f"Could not load sync session: {e}")
     return None
+
+def invalidate_sync_session(reason: str = "expired"):
+    """
+    Clears cached session on disk and in memory when a token is rejected with 401 Unauthorized.
+    Prevents background daemons from endlessly hammering Audiobookshelf with dead credentials.
+    """
+    global _last_authenticated_session, _last_saved_session_hash
+    try:
+        session_file = os.path.join(VOLUME_DIR, ".abs_sync_session.json")
+        if os.path.exists(session_file):
+            os.remove(session_file)
+            logger.info(f"[Session] Removed stale session file '{session_file}' (reason: {reason}).")
+    except Exception as e:
+        logger.warning(f"[Session] Could not remove session file: {e}")
+    _last_authenticated_session = {}
+    _last_saved_session_hash = ""
+    if "_socket_listener" in globals() and _socket_listener is not None:
+        _socket_listener.wake()
 
 # In-memory tracking of recent extraction completions for real-time frontend notifications
 _recent_extractions: List[Dict[str, Any]] = []
@@ -2323,7 +2340,7 @@ def run_bookmark_sync_cycle(force_token: Optional[str] = None, force_server: Opt
         _sync_state["is_syncing"] = True
 
     try:
-        token = force_token or ABS_API_TOKEN or _last_authenticated_session.get("token")
+        token = force_token or _last_authenticated_session.get("token")
         target_server = resolve_abs_server_url(req_url=force_server)
 
         if not token:
@@ -2337,7 +2354,7 @@ def run_bookmark_sync_cycle(force_token: Optional[str] = None, force_server: Opt
             _sync_state["is_syncing"] = False
             return {
                 "status": "idle",
-                "message": "No active authentication. Log into the Web Dashboard once or set ABS_API_TOKEN in ecosystem.config.cjs to enable autonomous 24/7 sync.",
+                "message": "No active user session. Please log in via the Web Dashboard Auth Modal to enable automatic bookmark sync.",
                 "unextracted_count": 0,
                 "processed_count": 0
             }
@@ -2357,6 +2374,17 @@ def run_bookmark_sync_cycle(force_token: Optional[str] = None, force_server: Opt
         if resp.status_code != 200:
             err_msg = f"Audiobookshelf server at {target_server} returned HTTP {resp.status_code}"
             logger.warning(f"[Auto-Sync] {err_msg}")
+            if resp.status_code == 401:
+                logger.warning(
+                    "[Auto-Sync] [!] Audiobookshelf authentication failed (HTTP 401 Unauthorized). "
+                    "The user session token has expired or is invalid. Cached session has been cleared. "
+                    "Please open the Auth Modal in the Web Dashboard to log in or renew your session."
+                )
+                invalidate_sync_session(reason="HTTP 401 Unauthorized from /api/me")
+                err_msg = (
+                    "Audiobookshelf session expired (HTTP 401). "
+                    "Please open the Auth Modal in the Web Dashboard to log in."
+                )
             _sync_state["last_error"] = err_msg
             _sync_state["is_syncing"] = False
             return {"status": "error", "message": err_msg}
@@ -2663,10 +2691,11 @@ class AbsSocketIoListener:
             token = session.get("token") if session else None
             server_url = session.get("server_url") if session else None
 
-            if not token or not server_url:
+            if not token:
                 # Check memory cache fallback
                 token = _last_authenticated_session.get("token")
-                server_url = ABS_TARGET_SERVER
+            if not server_url:
+                server_url = resolve_abs_server_url()
 
             if not token or not server_url:
                 # Wait until session credentials are saved
@@ -2743,11 +2772,29 @@ class AbsSocketIoListener:
 
                     logger.debug(f"[Socket.IO Listener] Engine.IO open received: {first_msg[:60]}")
 
-                    # 2. Send Socket.IO CONNECT packet to '/' namespace (packet '40')
-                    await ws.send("40")
-
-                    # 3. Emit Audiobookshelf 'auth' event (packet '42["auth", "<token>"]')
+                    # 2. Send Socket.IO CONNECT packet to '/' namespace with auth payload (Socket.IO v4 standard)
                     token_json = json.dumps(str(token))
+                    auth_connect = f'40{{"token":{token_json}}}'
+                    await ws.send(auth_connect)
+
+                    # 3. Await server's CONNECT ACK or response packet before emitting events
+                    try:
+                        conn_resp = await asyncio.wait_for(ws.recv(), timeout=6.0)
+                        if isinstance(conn_resp, bytes):
+                            conn_resp = conn_resp.decode("utf-8", errors="ignore")
+                        if conn_resp.startswith("44"):
+                            disconnect_reason = f"Socket.IO connection rejected by server (44): {conn_resp[:80]}"
+                            logger.warning(f"[Socket.IO Listener] {disconnect_reason}")
+                            backoff_seconds = 60.0
+                            continue
+                    except asyncio.TimeoutError:
+                        pass
+                    except Exception as e:
+                        disconnect_reason = f"Error during connect handshake: {e}"
+                        logger.warning(f"[Socket.IO Listener] {disconnect_reason}")
+                        continue
+
+                    # 4. Also emit Audiobookshelf legacy 'auth' event (packet '42["auth", "<token>"]')
                     await ws.send(f'42["auth",{token_json}]')
                     logger.info("[Socket.IO Listener] Handshake complete and auth event emitted.")
 
@@ -2833,6 +2880,15 @@ class AbsSocketIoListener:
             if duration > 45:
                 # Connection was healthy for over 45 seconds, reset backoff
                 backoff_seconds = 5.0
+            elif duration < 2.0:
+                # Connection was severed almost immediately after handshake
+                # This occurs when Audiobookshelf server rejects the auth token or drops the socket
+                backoff_seconds = max(backoff_seconds * 1.5, 30.0)
+                logger.warning(
+                    f"[Socket.IO Listener] Connection dropped rapidly after handshake ({duration:.2f}s). "
+                    f"Possible causes: invalid/expired token or reverse proxy WebSocket timeout. "
+                    f"Backing off for {int(backoff_seconds)}s."
+                )
             else:
                 # Failed quickly, increase backoff up to 60s
                 backoff_seconds = min(backoff_seconds * 1.8, 60.0)
