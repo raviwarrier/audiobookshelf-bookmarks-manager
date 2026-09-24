@@ -252,6 +252,18 @@ curl -O -J -L "http://localhost:13380/api/export-book?book_title=Project%20Hail%
 
 ---
 
+## ⚡ Vibe Coding Disclaimer
+
+This project was built largely through **vibe coding**—a modern development workflow leveraging conversational AI and prompt-driven engineering alongside human architecture, iterative testing, and real-world debugging.
+
+### What that means for you:
+- **Built for Real Use, But Test First**: While this application is designed thoughtfully, includes safety mechanisms (ephemeral in-memory credential encryption, non-blocking asynchronous sync loops, CPU-throttled transcription workers, and immutable installation cutoffs), and is actively tested in live Audiobookshelf environments, it was produced rapidly through AI-assisted iteration.
+- **Review Before Deploying**: Always inspect the codebase, configuration scripts (`setup.sh`, `update.sh`), and environment variables to ensure they align with your home server or homelab security policies.
+- **Safe by Design**: This tool only reads audiobook source files to extract requested snippets and writes output exclusively to your designated `VOLUME_DIR`. It never alters, overwrites, or deletes your primary Audiobookshelf audio libraries.
+- **Feedback & Contributions**: If you run into edge cases, quirks, or have ideas for improvements, issues and pull requests are warmly welcomed!
+
+---
+
 ## License (MIT in Plain English)
 
 You are free to use, copy, modify, merge, publish, distribute, and sell copies of this software for personal, educational, or commercial purposes.
