@@ -30,7 +30,7 @@ GitHub: [https://github.com/raviwarrier/audiobookshelf-bookmarks-manager](https:
 
 ## Architecture
 
-![Architecture Diagram](/public/app_screenshots/architecture.png)
+![Architecture Diagram](public/app_screenshots/architecture.png)
 
 ### Component Overview
 
