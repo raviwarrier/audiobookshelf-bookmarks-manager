@@ -759,6 +759,24 @@ def map_container_path_to_host(container_path: str, book_title: Optional[str] = 
                         logger.info(f"Found audio file by filename search: '{found}'")
                         return found
 
+    # 5. Search by book title folder/files in candidate library roots if book_title is provided
+    if book_title:
+        clean_title = sanitize_filename(book_title).strip().lower()
+        if clean_title and clean_title not in ["unknown book", "na", "n/a", "unavailable book"]:
+            for search_base in [AUDIOBOOKS_PATH, "/srv/ssd/Bookshelf/Audiobooks", "/srv/ssd/Bookshelf/Summaries"]:
+                if search_base and os.path.isdir(search_base):
+                    base_depth = search_base.rstrip(os.sep).count(os.sep)
+                    for dirpath, dirnames, filenames in os.walk(search_base):
+                        if dirpath.count(os.sep) - base_depth > 3:
+                            continue
+                        cur_folder = os.path.basename(dirpath).lower()
+                        if clean_title in cur_folder or cur_folder in clean_title:
+                            for fn in filenames:
+                                if any(fn.lower().endswith(ext) for ext in [".mp3", ".m4b", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".wav"]):
+                                    found = os.path.join(dirpath, fn)
+                                    logger.info(f"Found audio file by book title directory match '{book_title}': '{found}'")
+                                    return found
+
     # Fallback: if AUDIOBOOKS_PATH is set and container path starts with /audiobooks/, return mapped path
     if AUDIOBOOKS_PATH and container_path.startswith("/audiobooks/"):
         return AUDIOBOOKS_PATH + container_path[len("/audiobooks"):]
@@ -1466,10 +1484,26 @@ def resolve_audio_target(
 
     # Resolve book item details and audio file path
     item_url = f"{target_server}/api/items/{library_item_id}?expanded=1"
-    try:
-        item_resp = _http_session.get(item_url, headers=headers, timeout=10)
-        if item_resp.status_code == 200:
-            item_data = item_resp.json()
+    item_data = None
+    selected_file = None
+    selected_af_start = 0.0
+
+    for attempt in range(3):
+        try:
+            # First attempt with expanded=1; fallback to non-expanded if timed out or slow
+            cur_url = item_url if attempt == 0 else f"{target_server}/api/items/{library_item_id}"
+            item_resp = _http_session.get(cur_url, headers=headers, timeout=12)
+            if item_resp.status_code == 200:
+                item_data = item_resp.json()
+                break
+            logger.warning(f"ABS returned status {item_resp.status_code} for item {library_item_id} (attempt {attempt + 1}/3)")
+            time.sleep(0.4)
+        except Exception as e:
+            logger.warning(f"Attempt {attempt + 1}/3 failed to fetch item details for {library_item_id}: {e}")
+            time.sleep(0.4)
+
+    if item_data:
+        try:
             media = item_data.get("media", {})
             meta = media.get("metadata", {})
 
@@ -1491,15 +1525,23 @@ def resolve_audio_target(
                         break
 
             # Find matching audio file
-            audio_files = media.get("audioFiles") or media.get("tracks") or []
+            audio_files = (
+                media.get("audioFiles")
+                or media.get("tracks")
+                or item_data.get("audioFiles")
+                or item_data.get("tracks")
+                or []
+            )
             if audio_files:
                 selected_file = audio_files[0]
+                selected_af_start = float(selected_file.get("startOffset") or 0.0)
                 for af in audio_files:
                     af_meta = af.get("metadata") or {}
                     af_start = float(af.get("startOffset") or 0.0)
                     af_dur = float(af.get("duration") or af_meta.get("duration") or 0.0)
                     if af_dur > 0 and af_start <= current_time <= (af_start + af_dur):
                         selected_file = af
+                        selected_af_start = af_start
                         break
 
                 meta_path = selected_file.get("metadata", {}).get("path")
@@ -1514,28 +1556,37 @@ def resolve_audio_target(
                     resolved_file_path = media_path or file_path
 
                 file_path = resolved_file_path or file_path
-    except Exception as e:
-        logger.warning(f"Failed to fetch item details for {library_item_id}: {e}")
-
-    if not file_path:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Could not determine source audio file path for library item '{library_item_id}'. Ensure the audio library is mounted."
-        )
-
-    # Translate Docker container path (/audiobooks/...) to host system path
-    host_file_path = map_container_path_to_host(file_path, book_title=book_title)
+            else:
+                # If audioFiles list was empty, check media.path or item_data.path
+                media_path = media.get("path") or item_data.get("path")
+                if media_path:
+                    file_path = media_path
+        except Exception as e:
+            logger.warning(f"Error parsing item data for {library_item_id}: {e}")
 
     # Derive direct HTTP stream URL as fallback if file is not accessible on local disk
     stream_url = None
     if library_item_id and target_server:
         file_ino = None
-        if 'selected_file' in locals() and selected_file:
+        if selected_file:
             file_ino = selected_file.get("ino") or selected_file.get("id")
         if file_ino:
             stream_url = f"{target_server}/api/items/{library_item_id}/file/{file_ino}"
         else:
             stream_url = f"{target_server}/api/items/{library_item_id}/download"
+
+    # Translate Docker container path (/audiobooks/...) to host system path
+    host_file_path = map_container_path_to_host(file_path or "", book_title=book_title)
+
+    # If host file does not exist on disk, but stream_url is available, use stream_url as file_path fallback
+    if (not host_file_path or not os.path.exists(host_file_path)) and stream_url:
+        host_file_path = stream_url
+
+    if not host_file_path and not stream_url:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Could not determine source audio file path for library item '{library_item_id}'. Ensure the audio library is mounted."
+        )
 
     return {
         "libraryItemId": library_item_id,
@@ -1547,7 +1598,7 @@ def resolve_audio_target(
         "subtitle": subtitle,
         "author": author,
         "chapter_name": chapter_name,
-        "startOffset": af_start if 'af_start' in locals() else 0.0
+        "startOffset": selected_af_start
     }
 
 
@@ -1896,6 +1947,8 @@ def process_bookmark_extraction(
             b_time = bookmark_data.get("time")
             if b_time is None:
                 b_time = bookmark_data.get("start_time") or bookmark_data.get("startTime") or bookmark_data.get("offset")
+        if b_time is None and custom_start is not None:
+            b_time = custom_start
 
         lib_id = library_item_id or (bookmark_data.get("libraryItemId") if bookmark_data else None)
         snippet_request = SnippetRequest(
@@ -1913,7 +1966,7 @@ def process_bookmark_extraction(
     cand_title = bookmark_data.get("title") if bookmark_data else None
     cand_created_at = (bookmark_data.get("createdAt") or bookmark_data.get("created_at")) if bookmark_data else None
 
-    if is_bookmark_tombstoned(
+    if not replace_timestamp and is_bookmark_tombstoned(
         lib_id=cand_lib_id,
         book_time=cand_time,
         snippet_id=cand_snip_id,
@@ -1955,7 +2008,7 @@ def process_bookmark_extraction(
     start_offset = float(session_state.get("startOffset") or 0.0)
 
     # Re-verify tombstone with fully resolved current_time and book title
-    if is_bookmark_tombstoned(
+    if not replace_timestamp and is_bookmark_tombstoned(
         lib_id=resolved_lib_item_id,
         book_time=float(current_time),
         snippet_id=cand_snip_id,
@@ -3177,13 +3230,17 @@ async def get_bookmarks_status(
 
 @app.post("/api/snippet/expand")
 @app.post("/api/snippet/update")
+@app.post("/api/snippet/retry")
+@app.post("/api/user/snippet/retry")
+@app.post("/api/user/snippet/expand")
 async def expand_or_update_snippet(
     request: Request,
     payload: SnippetExpandRequest,
     raw_token: str = Depends(extract_token_flexible)
 ):
     """
-    Adjusts and expands an existing snippet with new pre-roll and post-roll durations.
+    Adjusts and expands an existing snippet with new pre-roll and post-roll durations,
+    or retries extraction for a bookmark whose audio was previously unavailable.
     Re-clips the audio and re-runs transcription, replacing the previous version in-place.
     """
     server_url = resolve_abs_server_url(
@@ -3197,14 +3254,15 @@ async def expand_or_update_snippet(
 
     target_ts = payload.timestamp.strip()
     pre_roll = float(payload.preRoll if payload.preRoll is not None else (payload.pre_roll or 30.0))
-    post_roll = float(payload.postRoll if payload.postRoll is not None else (payload.post_roll or 60.0))
+    post_roll = float(payload.postRoll if payload.postRoll is not None else (payload.post_roll or 30.0))
     total_duration = max(5, int(round(pre_roll + post_roll)))
 
     cur_time = payload.currentTime if payload.currentTime is not None else payload.current_time
     lib_id = payload.libraryItemId or payload.library_item_id
+    resolved_book_title = payload.bookTitle or payload.book_title
 
     # If anchor timestamp or library item id is missing, look up existing snippet JSON metadata
-    if cur_time is None or not lib_id:
+    if cur_time is None or not lib_id or not resolved_book_title:
         for root in get_candidate_volume_dirs():
             for u in [safe_username, safe_username.lower(), user["id"]]:
                 u_dir = os.path.join(root, u, "bookmarks")
@@ -3218,9 +3276,11 @@ async def expand_or_update_snippet(
                                 with open(json_file, "r", encoding="utf-8") as jf:
                                     existing_meta = json.load(jf)
                                     if cur_time is None:
-                                        cur_time = existing_meta.get("current_time", existing_meta.get("start_time", 0.0) + 30.0)
+                                        cur_time = existing_meta.get("current_time", existing_meta.get("start_time", 0.0))
                                     if not lib_id:
                                         lib_id = existing_meta.get("library_item_id")
+                                    if not resolved_book_title:
+                                        resolved_book_title = existing_meta.get("book_title")
                             except Exception:
                                 pass
                             break
@@ -3230,7 +3290,7 @@ async def expand_or_update_snippet(
 
     new_start_time = max(0.0, float(cur_time) - pre_roll)
 
-    logger.info(f"Expanding snippet [{target_ts}] for @{username}: anchor={cur_time}s, pre_roll={pre_roll}s, post_roll={post_roll}s (start={new_start_time}s, duration={total_duration}s)")
+    logger.info(f"Expanding/retrying snippet [{target_ts}] for @{username}: anchor={cur_time}s, pre_roll={pre_roll}s, post_roll={post_roll}s (start={new_start_time}s, duration={total_duration}s, lib={lib_id})")
 
     # Execute extraction with replace_timestamp so old snippet is overwritten in-place
     result = process_bookmark_extraction(
@@ -3240,7 +3300,12 @@ async def expand_or_update_snippet(
         duration=total_duration,
         user_info=user,
         custom_start=new_start_time,
-        replace_timestamp=target_ts
+        replace_timestamp=target_ts,
+        bookmark_data={
+            "libraryItemId": lib_id,
+            "time": cur_time,
+            "title": resolved_book_title or ""
+        }
     )
     return result
 

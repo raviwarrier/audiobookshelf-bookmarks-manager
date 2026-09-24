@@ -262,7 +262,9 @@ async function startServer() {
         parsedUrl.pathname.startsWith("/api/installation-date") ||
         parsedUrl.pathname.startsWith("/api/user/bookmarks") ||
         parsedUrl.pathname.startsWith("/api/user/sync") ||
-        parsedUrl.pathname.startsWith("/api/sync");
+        parsedUrl.pathname.startsWith("/api/sync") ||
+        parsedUrl.pathname.startsWith("/api/snippet") ||
+        parsedUrl.pathname.startsWith("/api/user/snippet");
 
       if (isSidecarTarget) {
         cleanTargetUrl = `http://127.0.0.1:${sidecarPort}${parsedUrl.pathname}${parsedUrl.search}`;
@@ -439,8 +441,22 @@ async function startServer() {
     }
   });
 
-  // Direct proxy for automated bookmark background sync & installation cutoff
-  app.all(["/api/user/sync-bookmarks", "/api/sync-bookmarks", "/api/user/sync-status", "/api/sync-status", "/api/installation-date", "/api/user/installation-date", "/api/cutoff-config", "/api/user/cutoff-config"], async (req, res) => {
+  // Direct proxy for automated bookmark background sync & installation cutoff & snippet adjustments/retries
+  app.all([
+    "/api/user/sync-bookmarks",
+    "/api/sync-bookmarks",
+    "/api/user/sync-status",
+    "/api/sync-status",
+    "/api/installation-date",
+    "/api/user/installation-date",
+    "/api/cutoff-config",
+    "/api/user/cutoff-config",
+    "/api/snippet/expand",
+    "/api/snippet/update",
+    "/api/snippet/retry",
+    "/api/user/snippet/retry",
+    "/api/user/snippet/expand"
+  ], async (req, res) => {
     try {
       const sidecarBase = (process.env.SIDECAR_URL || `http://127.0.0.1:${process.env.SIDECAR_PORT || 13380}`).replace(/\/+$/, "");
       const targetUrl = `${sidecarBase}${req.originalUrl}`;

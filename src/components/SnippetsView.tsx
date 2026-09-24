@@ -72,6 +72,10 @@ export const SnippetsView: React.FC<SnippetsViewProps> = ({
   const [expandError, setExpandError] = useState<string | null>(null);
   const [expandSuccess, setExpandSuccess] = useState<string | null>(null);
 
+  // Retry extraction state
+  const [retryingSnippetId, setRetryingSnippetId] = useState<string | null>(null);
+  const [retryNotification, setRetryNotification] = useState<{ id: string; type: 'success' | 'error'; message: string } | null>(null);
+
   // Exporting state
   const [exportingBook, setExportingBook] = useState<string | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
@@ -448,11 +452,106 @@ export const SnippetsView: React.FC<SnippetsViewProps> = ({
   // Open Expand Modal with calculated current values
   const openExpandModal = (snippet: Snippet) => {
     setExpandSnippet(snippet);
-    // Default pre-roll is 30s, post-roll is 60s (or based on snippet duration)
+    // Default pre-roll is 30s, post-roll is 30s for retry or based on snippet duration
     setPreRoll(30);
-    setPostRoll(Math.max(30, snippet.duration - 30));
+    const calculatedPostRoll = snippet.duration > 0 ? Math.max(15, snippet.duration - 30) : 30;
+    setPostRoll(calculatedPostRoll);
     setExpandError(null);
     setExpandSuccess(null);
+  };
+
+  // Immediate retry extraction with default or custom pre/post roll
+  const handleRetryExtraction = async (snippet: Snippet, customPreRoll = 30, customPostRoll = 30) => {
+    setRetryingSnippetId(snippet.id);
+    setRetryNotification(null);
+
+    try {
+      const payload = {
+        timestamp: snippet.timestamp,
+        currentTime: snippet.currentTime ?? snippet.startTime,
+        preRoll: customPreRoll,
+        postRoll: customPostRoll,
+        libraryItemId: snippet.libraryItemId,
+        bookTitle: snippet.bookTitle,
+        token: activeToken,
+        serverUrl,
+      };
+
+      const targetEndpoint = `${sidecarUrl.replace(/\/+$/, '')}/api/snippet/retry`;
+      let res: Response;
+      let json: any = null;
+
+      try {
+        if (useProxy) {
+          res = await fetch('/api/proxy/abs', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              targetUrl: targetEndpoint,
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${activeToken || ''}`,
+                'X-ABS-Server-Url': serverUrl,
+              },
+              body: payload,
+            }),
+          });
+          const raw = await res.json();
+          json = raw.data || raw;
+        } else {
+          res = await fetch(targetEndpoint, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${activeToken || ''}`,
+              'X-ABS-Server-Url': serverUrl,
+            },
+            body: JSON.stringify(payload),
+          });
+          json = await res.json();
+        }
+      } catch (directErr: any) {
+        // Fallback to local server /api/snippet/retry
+        const fbRes = await fetch('/api/snippet/retry', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${activeToken || ''}`,
+            'X-ABS-Server-Url': serverUrl,
+          },
+          body: JSON.stringify(payload),
+        });
+        json = await fbRes.json();
+      }
+
+      if (json && (json.extraction_status === 'unavailable' || json.status === 'unextractable_saved')) {
+        const reason = json.snippet?.raw_transcript || json.message || 'Source audio could not be resolved.';
+        setRetryNotification({
+          id: snippet.id,
+          type: 'error',
+          message: `Retry completed, but source audio was still unreachable: ${reason}`,
+        });
+      } else {
+        setRetryNotification({
+          id: snippet.id,
+          type: 'success',
+          message: 'Audio extracted and transcribed successfully!',
+        });
+      }
+
+      if (onRefreshSnippets) {
+        await onRefreshSnippets();
+      }
+    } catch (err: unknown) {
+      setRetryNotification({
+        id: snippet.id,
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Error retrying snippet extraction',
+      });
+    } finally {
+      setRetryingSnippetId(null);
+    }
   };
 
   // Submit expansion to backend
@@ -467,7 +566,7 @@ export const SnippetsView: React.FC<SnippetsViewProps> = ({
     try {
       const payload = {
         timestamp: expandSnippet.timestamp,
-        currentTime: expandSnippet.currentTime ?? (expandSnippet.startTime + expandSnippet.duration / 2),
+        currentTime: expandSnippet.currentTime ?? (expandSnippet.startTime + (expandSnippet.duration > 0 ? expandSnippet.duration / 2 : 0)),
         preRoll,
         postRoll,
         libraryItemId: expandSnippet.libraryItemId,
@@ -479,23 +578,47 @@ export const SnippetsView: React.FC<SnippetsViewProps> = ({
       const targetEndpoint = `${sidecarUrl.replace(/\/+$/, '')}/api/snippet/expand`;
 
       let res: Response;
-      if (useProxy) {
-        res = await fetch('/api/proxy/abs', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            targetUrl: targetEndpoint,
+      let jsonResult: any = null;
+
+      try {
+        if (useProxy) {
+          res = await fetch('/api/proxy/abs', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              targetUrl: targetEndpoint,
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${activeToken || ''}`,
+                'X-ABS-Server-Url': serverUrl,
+              },
+              body: payload,
+            }),
+          });
+          const raw = await res.json();
+          jsonResult = raw.data || raw;
+          if (raw.ok === false) {
+            throw new Error(raw.data?.detail || raw.message || 'Failed to expand snippet');
+          }
+        } else {
+          res = await fetch(targetEndpoint, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
               'Authorization': `Bearer ${activeToken || ''}`,
               'X-ABS-Server-Url': serverUrl,
             },
-            body: payload,
-          }),
-        });
-      } else {
-        res = await fetch(targetEndpoint, {
+            body: JSON.stringify(payload),
+          });
+          jsonResult = await res.json();
+          if (!res.ok) {
+            throw new Error(jsonResult?.detail || 'Failed to expand snippet');
+          }
+        }
+      } catch (primaryErr: any) {
+        // Fallback to local server endpoint
+        const fbRes = await fetch('/api/snippet/expand', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -504,16 +627,15 @@ export const SnippetsView: React.FC<SnippetsViewProps> = ({
           },
           body: JSON.stringify(payload),
         });
+        jsonResult = await fbRes.json();
+        if (!fbRes.ok) {
+          throw new Error(jsonResult?.detail || jsonResult?.error || primaryErr.message || 'Failed to expand snippet');
+        }
       }
 
-      if (useProxy) {
-        const proxyJson = await res.json();
-        if (!proxyJson.ok) {
-          throw new Error(proxyJson.data?.detail || proxyJson.message || 'Failed to expand snippet');
-        }
-      } else if (!res.ok) {
-        const errJson = await res.json().catch(() => ({ detail: res.statusText }));
-        throw new Error(errJson.detail || 'Failed to expand snippet');
+      if (jsonResult && (jsonResult.extraction_status === 'unavailable' || jsonResult.status === 'unextractable_saved')) {
+        setExpandError('Extraction ran, but source audio could not be resolved from Audiobookshelf.');
+        return;
       }
 
       setExpandSuccess('Snippet successfully updated and re-transcribed!');
@@ -959,14 +1081,49 @@ export const SnippetsView: React.FC<SnippetsViewProps> = ({
                     />
                   </div>
                 ) : (
-                  <div className="bg-[#141414] p-3 border border-amber-900/40 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                    <div className="flex items-start sm:items-center gap-2 text-xs text-amber-300 font-mono">
-                      <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5 sm:mt-0" />
-                      <span>This bookmark was found in the library, but could not be extracted and transcribed (source file moved, deleted, or unmounted).</span>
+                  <div className="space-y-2">
+                    <div className="bg-[#141414] p-3 border border-amber-900/60 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div className="flex items-start sm:items-center gap-2 text-xs text-amber-300 font-mono">
+                        <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5 sm:mt-0" />
+                        <span>Bookmark recorded, but audio could not be extracted (source file moved, unmounted, or slow response).</span>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0 self-start sm:self-auto flex-wrap">
+                        <button
+                          onClick={() => handleRetryExtraction(snippet)}
+                          disabled={retryingSnippetId === snippet.id}
+                          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-amber-500 hover:bg-amber-400 text-black border border-amber-400 transition-colors disabled:opacity-50"
+                          title="Retry snipping and extracting audio for this bookmark"
+                        >
+                          <RotateCw className={`w-3.5 h-3.5 ${retryingSnippetId === snippet.id ? 'animate-spin' : ''}`} />
+                          <span>{retryingSnippetId === snippet.id ? 'Retrying Snipping...' : 'Retry Snipping'}</span>
+                        </button>
+                        <button
+                          onClick={() => openExpandModal(snippet)}
+                          disabled={retryingSnippetId === snippet.id}
+                          className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-mono bg-neutral-900 hover:bg-neutral-800 text-amber-300 border border-amber-800/80 transition-colors disabled:opacity-50"
+                          title="Set custom pre-roll and post-roll timestamps and retry extraction"
+                        >
+                          <Sliders className="w-3.5 h-3.5 text-amber-400" />
+                          <span>Adjust & Retry</span>
+                        </button>
+                      </div>
                     </div>
-                    <span className="text-[10px] uppercase font-mono px-2 py-0.5 bg-neutral-900 text-amber-400/90 border border-amber-800/60 shrink-0 self-start sm:self-auto">
-                      Audio N/A
-                    </span>
+
+                    {retryNotification && retryNotification.id === snippet.id && (
+                      <div className={`p-2.5 text-xs font-mono border flex items-center justify-between gap-2 ${
+                        retryNotification.type === 'success'
+                          ? 'bg-emerald-950/60 border-emerald-700 text-emerald-200'
+                          : 'bg-red-950/60 border-red-700 text-red-200'
+                      }`}>
+                        <span>{retryNotification.message}</span>
+                        <button
+                          onClick={() => setRetryNotification(null)}
+                          className="text-neutral-400 hover:text-white px-1"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -1060,12 +1217,25 @@ export const SnippetsView: React.FC<SnippetsViewProps> = ({
                         <span>Adjust Duration / Context</span>
                       </button>
                     ) : (
-                      <div
-                        className="flex items-center gap-1.5 px-3 py-1.5 border border-neutral-800 bg-[#141414] text-neutral-500 cursor-not-allowed opacity-50 font-mono"
-                        title="Cannot adjust duration: audio source is not accessible"
-                      >
-                        <Sliders className="w-3.5 h-3.5 text-neutral-600" />
-                        <span>Adjust (N/A)</span>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => handleRetryExtraction(snippet)}
+                          disabled={retryingSnippetId === snippet.id}
+                          className="flex items-center gap-1.5 px-3 py-1.5 border border-amber-600 bg-amber-950/70 hover:bg-amber-900/90 text-amber-200 hover:text-white font-mono text-xs transition-colors disabled:opacity-50"
+                          title="Retry extracting audio for this bookmark"
+                        >
+                          <RotateCw className={`w-3.5 h-3.5 text-amber-400 ${retryingSnippetId === snippet.id ? 'animate-spin' : ''}`} />
+                          <span>{retryingSnippetId === snippet.id ? 'Retrying...' : 'Retry Snipping'}</span>
+                        </button>
+                        <button
+                          onClick={() => openExpandModal(snippet)}
+                          disabled={retryingSnippetId === snippet.id}
+                          className="flex items-center gap-1.5 px-3 py-1.5 border border-neutral-700 bg-[#161616] hover:border-amber-500 text-neutral-300 hover:text-white font-mono text-xs transition-colors"
+                          title="Adjust pre-roll and post-roll timestamps and retry extraction"
+                        >
+                          <Sliders className="w-3.5 h-3.5 text-amber-400" />
+                          <span>Adjust & Retry</span>
+                        </button>
                       </div>
                     )}
 
@@ -1157,12 +1327,26 @@ export const SnippetsView: React.FC<SnippetsViewProps> = ({
             <div className="flex items-start justify-between border-b border-neutral-800 pb-3">
               <div>
                 <h3 className="text-sm font-semibold text-white uppercase tracking-tight flex items-center gap-2">
-                  <Sliders className="w-4 h-4 text-neutral-300" />
-                  <span>Expand Snippet Context</span>
+                  {(!expandSnippet.audioUrl || expandSnippet.extractionStatus === 'unavailable' || expandSnippet.duration <= 0) ? (
+                    <>
+                      <RotateCw className="w-4 h-4 text-amber-400" />
+                      <span>Retry Snipping & Extract Audio</span>
+                    </>
+                  ) : (
+                    <>
+                      <Sliders className="w-4 h-4 text-neutral-300" />
+                      <span>Expand Snippet Context</span>
+                    </>
+                  )}
                 </h3>
                 <p className="text-xs text-neutral-400 mt-1 truncate max-w-xs">
                   {expandSnippet.bookTitle}
                 </p>
+                {(!expandSnippet.audioUrl || expandSnippet.extractionStatus === 'unavailable' || expandSnippet.duration <= 0) && (
+                  <p className="text-[11px] text-amber-300/80 mt-1">
+                    Set pre-roll and post-roll timestamps around the bookmark anchor to retry extraction.
+                  </p>
+                )}
               </div>
               <button
                 onClick={() => !isExpanding && setExpandSnippet(null)}
@@ -1263,6 +1447,11 @@ export const SnippetsView: React.FC<SnippetsViewProps> = ({
                     <>
                       <RotateCw className="w-3.5 h-3.5 animate-spin" />
                       <span>Re-clipping & Transcribing...</span>
+                    </>
+                  ) : (!expandSnippet.audioUrl || expandSnippet.extractionStatus === 'unavailable' || expandSnippet.duration <= 0) ? (
+                    <>
+                      <RotateCw className="w-3.5 h-3.5" />
+                      <span>Retry Extraction & Transcribe</span>
                     </>
                   ) : (
                     <>
