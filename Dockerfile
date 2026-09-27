@@ -15,7 +15,7 @@ WORKDIR /app
 
 # Install Python requirements
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --only-binary :all: -r requirements.txt
 
 # Pre-download transcription models into image cache so server admin does not need to install anything manually
 # 1. Primary engine: faster-whisper base.en model

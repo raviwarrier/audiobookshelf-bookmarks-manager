@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { AbsActiveSession, AbsUser, Snippet } from '../types';
 import { createAbsBookmark, formatAuthors, getPlayableAudioUrl } from '../lib/absClient';
+import { safeSidecarFetch } from '../lib/safeFetch';
 
 interface CaptureViewProps {
   user: AbsUser | null;
@@ -93,13 +94,6 @@ export const CaptureView: React.FC<CaptureViewProps> = ({
     try {
       setCurrentStep('Connecting to sidecar POST /api/snippet...');
 
-      const sidecarEndpoint = `${sidecarUrl.replace(/\/+$/, '')}/api/snippet`;
-      const isCloudPreview = typeof window !== 'undefined' && window.location.hostname.includes('run.app');
-      const isSidecarLocal = sidecarUrl.includes('localhost') || sidecarUrl.includes('127.0.0.1');
-      // Always proxy through web backend unless running inside remote cloud preview attempting to reach client-side localhost
-      const shouldProxySidecar = useProxy && !(isCloudPreview && isSidecarLocal);
-
-      const fetchUrl = shouldProxySidecar ? '/api/proxy/abs' : sidecarEndpoint;
       const snippetPayload = {
         duration: snipDuration,
         server_url: serverUrl,
@@ -110,41 +104,23 @@ export const CaptureView: React.FC<CaptureViewProps> = ({
         startTime: computedStart,
       };
 
-      const fetchOptions: RequestInit = {
+      const res = await safeSidecarFetch('/api/snippet', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(shouldProxySidecar ? {} : { 
-            Authorization: `Bearer ${activeToken}`,
-            'X-ABS-Server-Url': serverUrl,
-          }),
-        },
-        body: JSON.stringify(
-          shouldProxySidecar
-            ? {
-                targetUrl: sidecarEndpoint,
-                method: 'POST',
-                headers: {
-                  Authorization: `Bearer ${activeToken}`,
-                  'Content-Type': 'application/json',
-                  'X-ABS-Server-Url': serverUrl,
-                },
-                body: snippetPayload,
-              }
-            : snippetPayload
-        ),
-      };
+        token: activeToken,
+        serverUrl,
+        sidecarUrl,
+        useProxy,
+        body: snippetPayload,
+      });
 
-      const res = await fetch(fetchUrl, fetchOptions);
+      if (!res.ok) {
+        const detail = res.data?.detail || res.data?.message || 'Sidecar request failed';
+        throw new Error(`Sidecar proxy error (HTTP ${res.status || 502}): ${detail}`);
+      }
 
-      if (shouldProxySidecar) {
-        const proxyResp = await res.json();
-        if (!proxyResp.ok) {
-          const detail = proxyResp.data?.detail || proxyResp.message || 'Sidecar request failed';
-          throw new Error(`Sidecar proxy error (HTTP ${proxyResp.status || 502}): ${detail}`);
-        }
-        const snip = proxyResp.data.snippet;
-        const ts = snip.timestamp || new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14);
+      const payloadData = res.data?.data || res.data;
+      const snip = payloadData?.snippet || payloadData;
+      const ts = snip?.timestamp || new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14);
         
         const snippetResult: Snippet = {
           id: `${snip.book_title || session.bookTitle}-${ts}`,
@@ -165,35 +141,6 @@ export const CaptureView: React.FC<CaptureViewProps> = ({
 
         setLastSnippet(snippetResult);
         onSnippetCreated(snippetResult);
-      } else {
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({ detail: res.statusText }));
-          throw new Error(`Sidecar error (HTTP ${res.status}): ${err.detail || 'Request failed'}`);
-        }
-        const data = await res.json();
-        const snip = data.snippet;
-        const ts = snip.timestamp || new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14);
-
-        const snippetResult: Snippet = {
-          id: `${snip.book_title}-${ts}`,
-          bookTitle: snip.book_title,
-          author: formatAuthors(snip.author, session.author),
-          chapterName: snip.chapter,
-          timestamp: ts,
-          startTime: snip.start_time,
-          currentTime: snip.current_time ?? session.currentTime,
-          libraryItemId: session.libraryItemId,
-          duration: snip.duration,
-          audioUrl: getPlayableAudioUrl(snip.audio_url, sidecarUrl, useProxy),
-          transcript: snip.transcript,
-          markdownContent: snip.transcript,
-          createdAt: Date.now(),
-          username: user.username,
-        };
-
-        setLastSnippet(snippetResult);
-        onSnippetCreated(snippetResult);
-      }
 
       setCurrentStep('');
     } catch (err: unknown) {

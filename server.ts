@@ -444,6 +444,12 @@ async function startServer() {
 
   // Direct proxy for automated bookmark background sync & installation cutoff & snippet adjustments/retries
   app.all([
+    "/api/user/bookmarks",
+    "/api/user/bookmarks/*",
+    "/api/bookmarks",
+    "/api/bookmarks/*",
+    "/api/snippet",
+    "/api/user/snippet",
     "/api/user/sync-bookmarks",
     "/api/sync-bookmarks",
     "/api/user/sync-status",

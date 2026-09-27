@@ -75,16 +75,142 @@ export function saveStoredCredentials(creds: StoredCredentials): void {
 }
 
 /**
+ * Sanitizes and validates a URL loaded from untrusted browser storage,
+ * preventing DOM-based injection and Client-Side Request Forgery (CWE-79 / CWE-918).
+ */
+export function sanitizeStoredUrl(url?: string | null): string {
+  if (!url || typeof url !== 'string') return '';
+  const trimmed = url.trim();
+  if (!trimmed || trimmed.length > 2048) return '';
+  
+  // Reject control characters, newlines, quotation marks, or HTML characters
+  if (/[\x00-\x1F\x7F<>"'{}|\\^`]/g.test(trimmed)) {
+    return '';
+  }
+
+  try {
+    const formatted = trimmed.startsWith('http://') || trimmed.startsWith('https://')
+      ? trimmed
+      : `http://${trimmed}`;
+    const parsed = new URL(formatted);
+
+    // Strictly allow only http: and https: protocols
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return '';
+    }
+
+    // Prohibit embedded credentials (e.g. http://user:pass@host)
+    if (parsed.username || parsed.password) {
+      return '';
+    }
+
+    const host = parsed.hostname.toLowerCase();
+
+    // Prohibit cloud metadata endpoints and internal IP leakage vectors
+    if (
+      host === '169.254.169.254' ||
+      host.startsWith('169.254.') ||
+      host === 'metadata.google.internal' ||
+      host === 'metadata' ||
+      host === 'instance-data'
+    ) {
+      return '';
+    }
+
+    // Ensure hostname contains only valid domain/IP characters
+    if (!/^[a-zA-Z0-9.\-_:]+$/.test(parsed.host)) {
+      return '';
+    }
+
+    // Validate port range if specified
+    if (parsed.port) {
+      const portNum = Number(parsed.port);
+      if (isNaN(portNum) || portNum < 1 || portNum > 65535) {
+        return '';
+      }
+    }
+
+    // Return clean origin (protocol + host/port) without path, query, or hash
+    return `${parsed.protocol}//${parsed.host}`;
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Safely constructs and validates a destination URL for API requests,
+ * strictly preventing Client-Side Request Forgery (CSRF / CWE-918) and open redirection.
+ */
+export function buildSafeApiUrl(baseUrl: string, apiPath: string): string {
+  const cleanPath = apiPath.startsWith('/') ? apiPath : `/${apiPath}`;
+  if (!cleanPath.startsWith('/api/') || cleanPath.includes('..') || cleanPath.includes('\\')) {
+    throw new Error('Security violation: invalid API path requested.');
+  }
+
+  const trimmedBase = (baseUrl || '').trim();
+  if (
+    !trimmedBase ||
+    trimmedBase.includes('[your ip:port') ||
+    trimmedBase === 'http://localhost:13380' ||
+    trimmedBase === 'http://127.0.0.1:13380'
+  ) {
+    // When using local/default sidecar, return relative path directly on current origin
+    return cleanPath;
+  }
+
+  const sanitizedBase = sanitizeStoredUrl(trimmedBase);
+  if (!sanitizedBase) {
+    return cleanPath;
+  }
+
+  try {
+    const resolved = new URL(cleanPath, sanitizedBase);
+    if (resolved.protocol !== 'http:' && resolved.protocol !== 'https:') {
+      return cleanPath;
+    }
+    return resolved.toString();
+  } catch {
+    return cleanPath;
+  }
+}
+
+/**
  * Retrieves saved credentials from localStorage if present.
+ * Strictly sanitizes raw storage data against DOM-based attacks and CSRF.
  */
 export function getStoredCredentials(): StoredCredentials | null {
   if (typeof window === 'undefined') return null;
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
+
+    // Defense against oversized or contaminated browser storage payload
+    if (raw.length > 4096 || /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/.test(raw)) {
+      localStorage.removeItem(STORAGE_KEY);
+      return null;
+    }
+
     const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === 'object' && (parsed.serverUrl || parsed.token)) {
-      return parsed as StoredCredentials;
+    if (parsed && typeof parsed === 'object') {
+      const sanitizedServer = sanitizeStoredUrl(parsed.serverUrl);
+      const sanitizedSidecar = sanitizeStoredUrl(parsed.sidecarUrl);
+      const cleanToken = typeof parsed.token === 'string' && /^[a-zA-Z0-9_\-.~+/=]{1,512}$/.test(parsed.token.trim())
+        ? parsed.token.trim()
+        : undefined;
+      const cleanUsername = typeof parsed.username === 'string'
+        ? parsed.username.trim().replace(/[\x00-\x1F\x7F<>"'{}|\\^`]/g, '').slice(0, 100)
+        : undefined;
+
+      if (sanitizedServer || cleanToken || sanitizedSidecar) {
+        return {
+          serverUrl: sanitizedServer || '',
+          sidecarUrl: sanitizedSidecar || '',
+          token: cleanToken,
+          username: cleanUsername,
+          authMode: parsed.authMode === 'token' ? 'token' : 'userpass',
+          remember: Boolean(parsed.remember)
+        };
+      }
     }
   } catch (err) {
     console.warn('Failed to parse stored credentials from localStorage:', err);

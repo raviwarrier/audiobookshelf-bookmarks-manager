@@ -27,12 +27,75 @@ import logging
 import time
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List, Tuple
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, quote, urlsplit
+
+try:
+    import aiofiles
+except ImportError:
+    class _AsyncFileContext:
+        def __init__(self, filename, mode="r", encoding="utf-8", **kwargs):
+            self.filename = filename
+            self.mode = mode
+            self.encoding = encoding
+            self.kwargs = kwargs
+            self._file = None
+
+        async def __aenter__(self):
+            self._file = await asyncio.to_thread(open, self.filename, self.mode, encoding=self.encoding, **self.kwargs)
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            if self._file:
+                await asyncio.to_thread(self._file.close)
+
+        async def read(self, *args, **kwargs):
+            return await asyncio.to_thread(self._file.read, *args, **kwargs)
+
+        async def write(self, *args, **kwargs):
+            return await asyncio.to_thread(self._file.write, *args, **kwargs)
+
+        async def readline(self, *args, **kwargs):
+            return await asyncio.to_thread(self._file.readline, *args, **kwargs)
+
+    class _AioFilesShim:
+        @staticmethod
+        def open(file, mode="r", encoding="utf-8", **kwargs):
+            return _AsyncFileContext(file, mode, encoding=encoding, **kwargs)
+
+    aiofiles = _AioFilesShim()
 
 try:
     import httpx
 except ImportError:
-    httpx = None
+    class _AsyncClientShim:
+        def __init__(self, *args, **kwargs):
+            self.timeout = kwargs.get("timeout", 10.0)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+        async def get(self, url, headers=None, **kwargs):
+            def _do_get():
+                return _http_session.get(url, headers=headers, timeout=self.timeout)
+            return await asyncio.to_thread(_do_get)
+
+        async def delete(self, url, headers=None, **kwargs):
+            def _do_del():
+                return _http_session.delete(url, headers=headers, timeout=self.timeout)
+            return await asyncio.to_thread(_do_del)
+
+        async def post(self, url, headers=None, json=None, data=None, **kwargs):
+            def _do_post():
+                return _http_session.post(url, headers=headers, json=json, data=data, timeout=self.timeout)
+            return await asyncio.to_thread(_do_post)
+
+    class _HttpxShim:
+        AsyncClient = _AsyncClientShim
+
+    httpx = _HttpxShim()
 
 try:
     import websockets
@@ -59,7 +122,7 @@ from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse, JSON
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, validator
 
 # Configure logging (stream to sys.stdout so standard INFO logs are routed to pm2 out.log)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", stream=sys.stdout)
@@ -787,20 +850,36 @@ def map_container_path_to_host(container_path: str, book_title: Optional[str] = 
 # Templates
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
+# Strong references to running background tasks to prevent premature garbage collection (Python S6929 / RUF006)
+_background_tasks: set[asyncio.Task] = set()
+
+
+def safe_create_background_task(coro, name: Optional[str] = None) -> asyncio.Task:
+    """
+    Creates an asyncio Task and retains a strong reference in _background_tasks
+    until completion, preventing premature garbage collection.
+    """
+    task = asyncio.create_task(coro, name=name)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
+
+
 @asynccontextmanager
 async def lifespan(app_instance: FastAPI):
     """Start autonomous background bookmark sync daemon and handle Whisper model initialization."""
+    warmup_task: Optional[asyncio.Task] = None
     if PREWARM_WHISPER:
         def _warmup():
             try:
                 get_whisper_model()
             except Exception as e:
                 logger.warning(f"Whisper background pre-warm encountered: {e}")
-        asyncio.create_task(asyncio.to_thread(_warmup))
+        warmup_task = safe_create_background_task(asyncio.to_thread(_warmup), name="whisper_warmup")
     else:
         logger.info(f"Whisper lazy-loading active (max threads: {WHISPER_CPU_THREADS}) - idle CPU stays near 0%.")
-    asyncio.create_task(background_bookmark_sync_daemon())
-    asyncio.create_task(_socket_listener.start())
+    sync_daemon_task = safe_create_background_task(background_bookmark_sync_daemon(), name="background_sync_daemon")
+    socket_listener_task = safe_create_background_task(_socket_listener.start(), name="socket_listener")
     yield
 
 # FastAPI App
@@ -997,6 +1076,262 @@ def sanitize_filename(name: str) -> str:
     clean = re.sub(r'[\\/*?:"<>|]', "_", name)
     clean = clean.strip(" .")
     return clean or "untitled"
+
+
+def validate_and_sanitize_snippet_timestamp(ts: Optional[str]) -> str:
+    """
+    Validates and sanitizes a snippet timestamp identifier to prevent path traversal (CWE-22 / CWE-73).
+    Ensures the timestamp contains strictly safe alphanumeric, underscore, or hyphen characters,
+    with no path separators, directory traversal sequences ('..'), or dots.
+    """
+    if not ts or not isinstance(ts, str):
+        raise HTTPException(status_code=400, detail="Invalid timestamp: timestamp identifier is required.")
+
+    clean = ts.strip()
+    if not clean:
+        raise HTTPException(status_code=400, detail="Invalid timestamp: cannot be empty.")
+
+    # Strictly forbid path separators, directory traversal sequences, control characters, or dots
+    if "/" in clean or "\\" in clean or ".." in clean or "\0" in clean or "." in clean:
+        raise HTTPException(
+            status_code=400,
+            detail="Security violation: timestamp contains forbidden path traversal characters."
+        )
+
+    # Strictly allow only safe alphanumeric, underscore, and hyphen characters (up to 64 chars)
+    if not re.match(r"^[A-Za-z0-9_\-]+$", clean) or clean.startswith("-") or len(clean) > 64:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid timestamp: must contain only alphanumeric characters, hyphens, and underscores."
+        )
+
+    base = os.path.basename(clean)
+    if base != clean or not base:
+        raise HTTPException(status_code=400, detail="Invalid timestamp format.")
+
+    return base
+
+
+def validate_and_sanitize_library_item_id(lib_id: Optional[Any]) -> Optional[str]:
+    """
+    Validates and sanitizes an Audiobookshelf library_item_id to prevent API Traversal (CWE-22 / CWE-918).
+    Enforces strict alphanumeric, hyphen, and underscore characters (UUID or standard item ID format),
+    explicitly prohibiting path traversal tokens ('..'), slashes, backslashes, null bytes, and control characters.
+    """
+    if not lib_id or not isinstance(lib_id, str):
+        return None
+
+    clean = lib_id.strip()
+    if not clean or clean.lower() in ("n/a", "unknown", "null", "none"):
+        return None
+
+    # Block path traversal, URL query/fragment, null bytes, or URL-encoding attempts
+    if any(c in clean for c in ("/", "\\", "..", "%", "?", "#", "&", "\0", "\r", "\n", "\t")):
+        logger.warning(f"Security: rejected library_item_id containing illegal path characters: {clean!r}")
+        return None
+
+    # Length guard: library item IDs in ABS are UUIDs or alphanumeric IDs (usually 16-64 chars)
+    if len(clean) > 128:
+        logger.warning(f"Security: rejected oversized library_item_id: {clean[:30]}...")
+        return None
+
+    # Strict whitelist regex: only alphanumeric, underscore, and hyphens allowed
+    if not re.match(r"^[A-Za-z0-9_\-]+$", clean):
+        logger.warning(f"Security: rejected library_item_id failing regex whitelist: {clean!r}")
+        return None
+
+    # Ensure os.path.basename matches the string
+    if os.path.basename(clean) != clean:
+        return None
+
+    return clean
+
+
+def safe_remove_file_in_directory(parent_dir: str, filename: str) -> bool:
+    """
+    Safely removes a file from parent_dir, strictly preventing Path Traversal (CWE-22 / CWE-73)
+    and Symlink Following (CWE-59).
+    
+    1. Validates that filename is strictly a single filename basename (no path delimiters or relative tokens).
+    2. Enforces allowed alphanumeric/standard character set and allowed extension (.mp3, .md, .json).
+    3. Resolves real canonical paths with os.path.realpath.
+    4. Guarantees the resolved target path is strictly located within the canonical parent directory.
+    5. Verifies the target is an existing regular file and not a symlink.
+    6. Safely unlinks the file.
+    """
+    if not parent_dir or not filename:
+        return False
+
+    # 1. Reject any path traversal characters in filename
+    clean_fn = os.path.basename(filename.strip())
+    if clean_fn != filename.strip() or "/" in filename or "\\" in filename or ".." in filename or "\0" in filename:
+        logger.warning(f"Security: rejected unsafe filename deletion attempt: {filename!r}")
+        return False
+
+    # 2. Strict whitelist of allowed snippet file extensions and character pattern
+    if not re.match(r"^[A-Za-z0-9_\-.]+\.(mp3|md|json)$", clean_fn):
+        logger.warning(f"Security: filename {clean_fn!r} does not match allowed snippet naming pattern")
+        return False
+
+    # 3. Canonical directory resolution
+    canonical_dir = os.path.realpath(parent_dir)
+    target_path = os.path.realpath(os.path.join(canonical_dir, clean_fn))
+
+    # 4. Strict directory containment boundary check
+    if os.path.commonpath([canonical_dir, target_path]) != canonical_dir:
+        logger.warning(f"Security: path traversal blocked for {target_path} outside {canonical_dir}")
+        return False
+
+    # Ensure target_path is directly a child of canonical_dir
+    if not target_path.startswith(canonical_dir + os.sep):
+        logger.warning(f"Security: target {target_path} is not directly inside {canonical_dir}")
+        return False
+
+    # 5. Prevent symlink attacks and ensure target is an existing regular file
+    if os.path.islink(target_path):
+        logger.warning(f"Security: refusing to delete symlink {target_path}")
+        return False
+
+    if not os.path.isfile(target_path):
+        return False
+
+    try:
+        os.remove(target_path)
+        logger.info(f"Safely unlinked file: {target_path}")
+        return True
+    except Exception as del_err:
+        logger.warning(f"Could not remove file {target_path}: {del_err}")
+        return False
+
+
+def safe_write_text_file(parent_dir: str, filename: str, content: str) -> str:
+    """
+    Safely writes text content to a file inside parent_dir, strictly preventing Path Traversal (CWE-22 / CWE-73)
+    and Symlink Following (CWE-59).
+    """
+    if not parent_dir or not filename:
+        raise HTTPException(status_code=400, detail="Invalid directory or filename.")
+
+    clean_fn = os.path.basename(filename.strip())
+    if clean_fn != filename.strip() or "/" in filename or "\\" in filename or ".." in filename or "\0" in filename:
+        raise HTTPException(status_code=400, detail="Security violation: unsafe filename pattern.")
+
+    if not re.match(r"^[A-Za-z0-9_\-.]+\.(md|txt)$", clean_fn):
+        raise HTTPException(status_code=400, detail="Security violation: forbidden file format.")
+
+    canonical_dir = os.path.realpath(parent_dir)
+    os.makedirs(canonical_dir, exist_ok=True)
+    target_path = os.path.realpath(os.path.join(canonical_dir, clean_fn))
+
+    if os.path.commonpath([canonical_dir, target_path]) != canonical_dir or not target_path.startswith(canonical_dir + os.sep):
+        raise HTTPException(status_code=400, detail="Security violation: path traversal blocked.")
+
+    if os.path.islink(target_path):
+        raise HTTPException(status_code=400, detail="Security violation: symbolic links not permitted.")
+
+    with open(target_path, "w", encoding="utf-8") as f:
+        f.write(content)
+
+    return target_path
+
+
+def safe_write_json_file(parent_dir: str, filename: str, data: Any) -> str:
+    """
+    Safely writes JSON data to a file inside parent_dir, strictly preventing Path Traversal (CWE-22 / CWE-73)
+    and Symlink Following (CWE-59).
+    """
+    if not parent_dir or not filename:
+        raise HTTPException(status_code=400, detail="Invalid directory or filename.")
+
+    clean_fn = os.path.basename(filename.strip())
+    if clean_fn != filename.strip() or "/" in filename or "\\" in filename or ".." in filename or "\0" in filename:
+        raise HTTPException(status_code=400, detail="Security violation: unsafe filename pattern.")
+
+    if not re.match(r"^[A-Za-z0-9_\-.]+\.json$", clean_fn):
+        raise HTTPException(status_code=400, detail="Security violation: forbidden file format.")
+
+    canonical_dir = os.path.realpath(parent_dir)
+    os.makedirs(canonical_dir, exist_ok=True)
+    target_path = os.path.realpath(os.path.join(canonical_dir, clean_fn))
+
+    if os.path.commonpath([canonical_dir, target_path]) != canonical_dir or not target_path.startswith(canonical_dir + os.sep):
+        raise HTTPException(status_code=400, detail="Security violation: path traversal blocked.")
+
+    if os.path.islink(target_path):
+        raise HTTPException(status_code=400, detail="Security violation: symbolic links not permitted.")
+
+    with open(target_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+
+    return target_path
+
+
+def safe_read_json_file(parent_dir: str, filename: str) -> Optional[Dict[str, Any]]:
+    """
+    Safely reads JSON data from a file inside parent_dir, strictly preventing Path Traversal (CWE-22 / CWE-73)
+    and Symlink Following (CWE-59).
+    """
+    if not parent_dir or not filename:
+        return None
+
+    clean_fn = os.path.basename(filename.strip())
+    if clean_fn != filename.strip() or "/" in filename or "\\" in filename or ".." in filename or "\0" in filename:
+        return None
+
+    if not re.match(r"^[A-Za-z0-9_\-.]+\.json$", clean_fn):
+        return None
+
+    canonical_dir = os.path.realpath(parent_dir)
+    target_path = os.path.realpath(os.path.join(canonical_dir, clean_fn))
+
+    if os.path.commonpath([canonical_dir, target_path]) != canonical_dir or not target_path.startswith(canonical_dir + os.sep):
+        return None
+
+    if os.path.islink(target_path):
+        return None
+
+    if not os.path.isfile(target_path):
+        return None
+
+    try:
+        with open(target_path, "r", encoding="utf-8") as jf:
+            return json.load(jf)
+    except Exception:
+        return None
+
+
+def safe_read_text_file(parent_dir: str, filename: str) -> Optional[str]:
+    """
+    Safely reads text data from a file inside parent_dir, strictly preventing Path Traversal (CWE-22 / CWE-73)
+    and Symlink Following (CWE-59).
+    """
+    if not parent_dir or not filename:
+        return None
+
+    clean_fn = os.path.basename(filename.strip())
+    if clean_fn != filename.strip() or "/" in filename or "\\" in filename or ".." in filename or "\0" in filename:
+        return None
+
+    if not re.match(r"^[A-Za-z0-9_\-.]+\.(md|txt|json)$", clean_fn):
+        return None
+
+    canonical_dir = os.path.realpath(parent_dir)
+    target_path = os.path.realpath(os.path.join(canonical_dir, clean_fn))
+
+    if os.path.commonpath([canonical_dir, target_path]) != canonical_dir or not target_path.startswith(canonical_dir + os.sep):
+        return None
+
+    if os.path.islink(target_path):
+        return None
+
+    if not os.path.isfile(target_path):
+        return None
+
+    try:
+        with open(target_path, "r", encoding="utf-8") as f:
+            return f.read()
+    except Exception:
+        return None
 
 
 _last_known_abs_server: Optional[str] = None
@@ -1313,7 +1648,7 @@ class SnippetExpandRequest(BaseModel):
     Payload for adjusting, expanding, or re-extracting an existing snippet.
     Re-clips audio using new pre-roll and post-roll durations and updates in-place.
     """
-    timestamp: str
+    timestamp: str = Field(..., min_length=1, max_length=64, description="Snippet timestamp identifier")
     current_time: Optional[float] = None
     currentTime: Optional[float] = None
     pre_roll: Optional[float] = 30.0
@@ -1327,6 +1662,22 @@ class SnippetExpandRequest(BaseModel):
     token: Optional[str] = None
     server_url: Optional[str] = None
     serverUrl: Optional[str] = None
+
+    @validator("timestamp", pre=True, always=True)
+    def validate_timestamp_format(cls, v):
+        if not v or not isinstance(v, str):
+            raise ValueError("Timestamp identifier is required.")
+        clean = v.strip()
+        if not clean:
+            raise ValueError("Timestamp identifier cannot be empty.")
+        if "/" in clean or "\\" in clean or ".." in clean or "\0" in clean or "." in clean:
+            raise ValueError("Security violation: timestamp contains forbidden path traversal characters.")
+        if not re.match(r"^[A-Za-z0-9_\-]+$", clean) or clean.startswith("-") or len(clean) > 64:
+            raise ValueError("Invalid timestamp: must contain only alphanumeric characters, underscores, and hyphens.")
+        base = os.path.basename(clean)
+        if base != clean or not base:
+            raise ValueError("Invalid timestamp format.")
+        return base
 
 
 class CutoffConfigRequest(BaseModel):
@@ -1777,9 +2128,20 @@ def create_unextractable_bookmark_snippet(
 
     output_dir = os.path.join(target_base, target_user_name, "bookmarks", safe_book_title)
     os.makedirs(output_dir, exist_ok=True)
+    real_output_dir = os.path.realpath(output_dir)
 
-    output_md = os.path.join(output_dir, f"{timestamp}.md")
-    output_json = os.path.join(output_dir, f"{timestamp}.json")
+    safe_ts = os.path.basename(str(timestamp))
+    output_md = os.path.join(real_output_dir, f"{safe_ts}.md")
+    output_json = os.path.join(real_output_dir, f"{safe_ts}.json")
+
+    # Strict boundary check (CWE-22 barrier): ensure output files strictly reside inside output_dir
+    for check_file in [output_md, output_json]:
+        real_file = os.path.realpath(check_file)
+        if os.path.commonpath([real_output_dir, real_file]) != real_output_dir:
+            raise HTTPException(
+                status_code=400,
+                detail="Security violation: resolved output path escapes user bookmarks directory."
+            )
 
     md_content = f"""---
 title: "{book_title_display}"
@@ -1810,8 +2172,7 @@ bookmark_title: "{bm_title}"
 
 {notice_body}
 """
-    with open(output_md, "w", encoding="utf-8") as f:
-        f.write(md_content)
+    output_md = safe_write_text_file(real_output_dir, f"{safe_ts}.md", md_content)
 
     meta_content = {
         "id": f"{safe_book_title}-{timestamp}",
@@ -1841,8 +2202,7 @@ bookmark_title: "{bm_title}"
         "extraction_status": "unavailable",
         "bookmark_title": bm_title
     }
-    with open(output_json, "w", encoding="utf-8") as f:
-        json.dump(meta_content, f, indent=2)
+    output_json = safe_write_json_file(real_output_dir, f"{safe_ts}.json", meta_content)
 
     with _extractions_lock:
         _recent_extractions.append({
@@ -1888,6 +2248,10 @@ def process_bookmark_extraction(
     Called synchronously by manual UI/API endpoints and asynchronously by the
     middleware bookmark interceptor background worker.
     """
+    # Early sanitization barrier to prevent CWE-22 / CWE-73 path traversal
+    if replace_timestamp is not None:
+        replace_timestamp = validate_and_sanitize_snippet_timestamp(replace_timestamp)
+
     # 1. Resolve auth token and server URL if attached to bookmark data
     if bookmark_data and not auth_token:
         auth_token = bookmark_data.get("_auth_token") or bookmark_data.get("auth_token") or bookmark_data.get("token")
@@ -2038,7 +2402,16 @@ def process_bookmark_extraction(
         pre_roll_val = custom_pre_roll if custom_pre_roll is not None else (INTERCEPT_PRE_ROLL if is_intercepted else SNIPPET_PRE_ROLL)
         start_time = max(0.0, file_relative_offset - pre_roll_val)
 
-    timestamp = replace_timestamp or datetime.now().strftime("%Y%m%d_%H%M%S")
+    if replace_timestamp:
+        safe_replace_ts = validate_and_sanitize_snippet_timestamp(replace_timestamp)
+        timestamp = safe_replace_ts
+    else:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    # Defense in depth: strictly verify timestamp is a clean basename with no traversal tokens
+    timestamp = os.path.basename(timestamp)
+    if not re.match(r"^[A-Za-z0-9_\-]+$", timestamp):
+        raise HTTPException(status_code=400, detail="Invalid snippet timestamp identifier.")
 
     # 6. User-Specific Volume Folder Structure:
     # {VOLUME_DIR}/{username}/bookmarks/{safe_book_title}/
@@ -2062,21 +2435,27 @@ def process_bookmark_extraction(
 
     output_dir = os.path.join(target_base, target_user_name, "bookmarks", safe_book_title)
     os.makedirs(output_dir, exist_ok=True)
+    real_output_dir = os.path.realpath(output_dir)
 
-    output_mp3 = os.path.join(output_dir, f"{timestamp}.mp3")
-    output_md = os.path.join(output_dir, f"{timestamp}.md")
-    output_json = os.path.join(output_dir, f"{timestamp}.json")
+    output_mp3 = os.path.join(real_output_dir, f"{timestamp}.mp3")
+    output_md = os.path.join(real_output_dir, f"{timestamp}.md")
+    output_json = os.path.join(real_output_dir, f"{timestamp}.json")
+
+    # Strict boundary check (CWE-22 / CWE-73 barrier): ensure output files strictly reside inside real_output_dir
+    for check_file in [output_mp3, output_md, output_json]:
+        real_file = os.path.realpath(check_file)
+        if os.path.commonpath([real_output_dir, real_file]) != real_output_dir:
+            raise HTTPException(
+                status_code=400,
+                detail="Security violation: resolved output path escapes user bookmarks directory."
+            )
 
     # When re-clipping or updating an existing snippet, delete the old files first
     # to guarantee clean replacement and ensure ffmpeg creates a fresh stream
     if replace_timestamp:
-        for stale_file in [output_mp3, output_md, output_json]:
-            if os.path.exists(stale_file):
-                try:
-                    os.remove(stale_file)
-                    logger.info(f"Unlinked stale file to prepare for clean re-clipping: {stale_file}")
-                except Exception as del_err:
-                    logger.warning(f"Could not remove stale file {stale_file}: {del_err}")
+        safe_target_ts = validate_and_sanitize_snippet_timestamp(replace_timestamp)
+        for ext in ("mp3", "md", "json"):
+            safe_remove_file_in_directory(real_output_dir, f"{safe_target_ts}.{ext}")
 
     # 7. ffmpeg Subprocess Call
     ffmpeg_bin = get_ffmpeg_bin()
@@ -2251,8 +2630,7 @@ transcription_engine: "{engine_used}"
 
 {transcript_body}
 """
-    with open(output_md, "w", encoding="utf-8") as f:
-        f.write(md_content)
+    output_md = safe_write_text_file(real_output_dir, f"{timestamp}.md", md_content)
 
     # 10. Write JSON metadata file for indexing
     meta_content = {
@@ -2281,8 +2659,7 @@ transcription_engine: "{engine_used}"
         "created_at": formatted_datetime,
         "transcription_engine": engine_used
     }
-    with open(output_json, "w", encoding="utf-8") as f:
-        json.dump(meta_content, f, indent=2)
+    output_json = safe_write_json_file(real_output_dir, f"{timestamp}.json", meta_content)
 
     # Record event in thread-safe recent list for real-time notification
     with _extractions_lock:
@@ -2746,7 +3123,7 @@ class AbsSocketIoListener:
 
         if self._debounce_task and not self._debounce_task.done():
             self._debounce_task.cancel()
-        self._debounce_task = asyncio.create_task(_debounced())
+        self._debounce_task = safe_create_background_task(_debounced(), name="socket_debounce_sync")
 
     async def start(self):
         """Main background loop handling connection, heartbeat, and real-time events with robust backoff."""
@@ -3011,7 +3388,10 @@ async def trigger_bookmark_sync(
         }
 
     # Dispatch sync cycle in background thread so HTTP response returns immediately without timing out
-    asyncio.create_task(asyncio.to_thread(run_bookmark_sync_cycle, force_token=raw_token, force_server=server_url))
+    sync_cycle_task = safe_create_background_task(
+        asyncio.to_thread(run_bookmark_sync_cycle, force_token=raw_token, force_server=server_url),
+        name="manual_sync_cycle"
+    )
 
     return {
         "status": "started",
@@ -3062,7 +3442,8 @@ async def create_snippet_or_bookmark(
     duration = payload.duration if payload and payload.duration else SNIPPET_DURATION
 
     try:
-        result = process_bookmark_extraction(
+        result = await asyncio.to_thread(
+            process_bookmark_extraction,
             library_item_id=payload.library_item_id if payload else None,
             auth_token=raw_token,
             server_url=server_url,
@@ -3141,15 +3522,16 @@ async def get_user_bookmarks(
                             metadata = {}
                             if os.path.exists(json_path):
                                 try:
-                                    with open(json_path, "r", encoding="utf-8") as jf:
-                                        metadata = json.load(jf)
+                                    async with aiofiles.open(json_path, "r", encoding="utf-8") as jf:
+                                        raw_json = await jf.read()
+                                        metadata = json.loads(raw_json)
                                 except Exception:
                                     pass
 
                             if not metadata:
                                 try:
-                                    with open(md_path, "r", encoding="utf-8") as f:
-                                        raw_md = f.read()
+                                    async with aiofiles.open(md_path, "r", encoding="utf-8") as f:
+                                        raw_md = await f.read()
                                     parsed = parse_frontmatter(raw_md)
                                     metadata = {
                                         "book_title": parsed.get("title") or book_dir.replace("_", " "),
@@ -3276,7 +3658,8 @@ async def expand_or_update_snippet(
     username = user["username"]
     safe_username = sanitize_filename(username)
 
-    target_ts = payload.timestamp.strip()
+    # Strictly validate and sanitize snippet timestamp identifier against path traversal
+    target_ts = validate_and_sanitize_snippet_timestamp(payload.timestamp)
     pre_roll = float(payload.preRoll if payload.preRoll is not None else (payload.pre_roll or 30.0))
     post_roll = float(payload.postRoll if payload.postRoll is not None else (payload.post_roll or 30.0))
     total_duration = max(5, int(round(pre_roll + post_roll)))
@@ -3293,20 +3676,19 @@ async def expand_or_update_snippet(
                 if not os.path.isdir(u_dir):
                     u_dir = os.path.join(root, u)
                 if os.path.isdir(u_dir):
+                    real_u_dir = os.path.realpath(u_dir)
                     for b_dir in os.listdir(u_dir):
-                        json_file = os.path.join(u_dir, b_dir, f"{target_ts}.json")
-                        if os.path.isfile(json_file):
-                            try:
-                                with open(json_file, "r", encoding="utf-8") as jf:
-                                    existing_meta = json.load(jf)
-                                    if cur_time is None:
-                                        cur_time = existing_meta.get("current_time", existing_meta.get("start_time", 0.0))
-                                    if not lib_id:
-                                        lib_id = existing_meta.get("library_item_id")
-                                    if not resolved_book_title:
-                                        resolved_book_title = existing_meta.get("book_title")
-                            except Exception:
-                                pass
+                        book_folder = os.path.join(real_u_dir, b_dir)
+                        if not os.path.isdir(book_folder):
+                            continue
+                        existing_meta = await asyncio.to_thread(safe_read_json_file, book_folder, f"{target_ts}.json")
+                        if existing_meta:
+                            if cur_time is None:
+                                cur_time = existing_meta.get("current_time", existing_meta.get("start_time", 0.0))
+                            if not lib_id:
+                                lib_id = existing_meta.get("library_item_id")
+                            if not resolved_book_title:
+                                resolved_book_title = existing_meta.get("book_title")
                             break
 
     if cur_time is None:
@@ -3317,7 +3699,8 @@ async def expand_or_update_snippet(
     logger.info(f"Expanding/retrying snippet [{target_ts}] for @{username}: anchor={cur_time}s, pre_roll={pre_roll}s, post_roll={post_roll}s (start={new_start_time}s, duration={total_duration}s, lib={lib_id})")
 
     # Execute extraction with replace_timestamp so old snippet is overwritten in-place
-    result = process_bookmark_extraction(
+    result = await asyncio.to_thread(
+        process_bookmark_extraction,
         library_item_id=lib_id,
         auth_token=raw_token,
         server_url=server_url,
@@ -3433,7 +3816,7 @@ async def update_cutoff_configuration(
         updated_config["note"] = f"Extracting bookmarks created on or after installation date ({clean_d})."
 
     # Save to disk and update globals
-    save_installation_config(updated_config)
+    await asyncio.to_thread(save_installation_config, updated_config)
     logger.info(f"[Cutoff Config] Successfully updated cutoff period mode='{mode}', cutoff='{updated_config.get('cutoff_datetime')}'")
 
     return {
@@ -3441,6 +3824,32 @@ async def update_cutoff_configuration(
         "message": f"Cutoff period updated to mode '{mode}' ({updated_config.get('cutoff_datetime')})",
         "config": INSTALLATION_CONFIG
     }
+
+
+def validate_and_sanitize_export_book_title(raw_title: Optional[str]) -> str:
+    """
+    Validates and sanitizes user-supplied book title for export,
+    preventing Path Traversal (CWE-22) and Filesystem Existence Oracle (CWE-209/CWE-200).
+    """
+    if not raw_title or not isinstance(raw_title, str):
+        raise HTTPException(status_code=400, detail="Book title parameter is required.")
+
+    clean_title = raw_title.strip()
+    if not clean_title or len(clean_title) > 200:
+        raise HTTPException(status_code=400, detail="Invalid book title length (must be 1-200 characters).")
+
+    if any(sep in clean_title for sep in ("/", "\\", "\0", "\r", "\n", "\t")):
+        raise HTTPException(status_code=400, detail="Security violation: book title contains illegal path characters.")
+    if ".." in clean_title or clean_title.startswith(".") or clean_title.endswith("."):
+        raise HTTPException(status_code=400, detail="Security violation: book title contains directory navigation tokens.")
+
+    if not re.match(r"^[a-zA-Z0-9_\- .',!:?()\[\]]+$", clean_title):
+        raise HTTPException(status_code=400, detail="Security violation: book title contains forbidden characters.")
+
+    sanitized = sanitize_filename(clean_title)
+    if not sanitized or sanitized.startswith(".") or "/" in sanitized or "\\" in sanitized or ".." in sanitized:
+        raise HTTPException(status_code=400, detail="Invalid book title after normalization.")
+    return sanitized
 
 
 @app.get("/api/export-book")
@@ -3482,48 +3891,54 @@ async def export_book_snippets(
 
     username = user["username"]
     safe_username = sanitize_filename(username)
-    safe_book_title = sanitize_filename(book_title)
 
-    # Resilient book directory resolution across candidate storage roots
+    # Strictly sanitize book title parameter against path traversal and special characters
+    safe_book_title = validate_and_sanitize_export_book_title(book_title)
+    target_clean = re.sub(r'[^a-zA-Z0-9]+', '', safe_book_title).lower()
+
+    # Discover book directory strictly by enumerating legitimate authorized folders inside candidate roots.
+    # No user-controlled string is ever concatenated with root paths to probe the filesystem (prevents Filesystem Oracle).
     book_dir_path = None
     candidate_roots = get_candidate_volume_dirs()
     user_search_names = list(dict.fromkeys([safe_username, safe_username.lower(), user.get("id", ""), "default_user"]))
-    clean_target = re.sub(r'[^a-zA-Z0-9]+', '', book_title).lower()
 
     for root in candidate_roots:
+        real_root = os.path.realpath(root)
+        if not os.path.isdir(real_root):
+            continue
         possible_user_dirs = []
         for u in user_search_names:
             possible_user_dirs.extend([
-                os.path.join(root, u, "bookmarks"),
-                os.path.join(root, u)
+                os.path.join(real_root, u, "bookmarks"),
+                os.path.join(real_root, u)
             ])
-        possible_user_dirs.append(root)
+        possible_user_dirs.append(real_root)
 
         for p_dir in possible_user_dirs:
             if not os.path.isdir(p_dir):
                 continue
+            real_p = os.path.realpath(p_dir)
+            if os.path.commonpath([real_root, real_p]) != real_root:
+                continue
 
-            # 1. Direct path matches
-            cand1 = os.path.join(p_dir, safe_book_title)
-            if os.path.isdir(cand1):
-                book_dir_path = cand1
-                break
-            cand2 = os.path.join(p_dir, book_title)
-            if os.path.isdir(cand2):
-                book_dir_path = cand2
-                break
-
-            # 2. Case-insensitive and cleaned token matching
-            for b_entry in os.listdir(p_dir):
-                full_entry_path = os.path.join(p_dir, b_entry)
-                if not os.path.isdir(full_entry_path):
+            # Enumerate only actual directories residing inside real_p
+            for b_entry in sorted(os.listdir(real_p)):
+                if b_entry.startswith("."):
                     continue
-                if b_entry.lower() == safe_book_title.lower() or b_entry.lower() == book_title.lower():
-                    book_dir_path = full_entry_path
+                clean_b_entry = os.path.basename(b_entry)
+                entry_full_path = os.path.realpath(os.path.join(real_p, clean_b_entry))
+                if os.path.commonpath([real_p, entry_full_path]) != real_p or os.path.islink(entry_full_path):
+                    continue
+                if not os.path.isdir(entry_full_path):
+                    continue
+
+                # Comparison barrier: match enumerated folder name against validated target
+                clean_entry = re.sub(r'[^a-zA-Z0-9]+', '', clean_b_entry).lower()
+                if clean_b_entry.lower() == safe_book_title.lower() or (clean_entry and clean_entry == target_clean):
+                    book_dir_path = entry_full_path
                     break
-                clean_entry = re.sub(r'[^a-zA-Z0-9]+', '', b_entry).lower()
-                if clean_entry and (clean_entry == clean_target or clean_target.startswith(clean_entry) or clean_entry.startswith(clean_target[:20])):
-                    book_dir_path = full_entry_path
+                if clean_entry and target_clean and (clean_entry.startswith(target_clean[:20]) or target_clean.startswith(clean_entry)):
+                    book_dir_path = entry_full_path
                     break
 
             if book_dir_path:
@@ -3531,24 +3946,24 @@ async def export_book_snippets(
         if book_dir_path:
             break
 
-    # 3. Deep walk fallback if folder structure differs
     if not book_dir_path:
-        for root in candidate_roots:
-            for dirpath, dirnames, filenames in os.walk(root):
-                folder_name = os.path.basename(dirpath)
-                clean_folder = re.sub(r'[^a-zA-Z0-9]+', '', folder_name).lower()
-                if clean_target and clean_folder and (clean_folder in clean_target or clean_target in clean_folder):
-                    if any(f.endswith(".md") or f.endswith(".mp3") for f in filenames):
-                        book_dir_path = dirpath
-                        break
-            if book_dir_path:
-                break
+        raise HTTPException(status_code=404, detail="No snippets found for the specified book.")
 
-    if not book_dir_path or not os.path.isdir(book_dir_path):
-        raise HTTPException(status_code=404, detail=f"No snippets found for book '{book_title}'")
+    real_book_dir = book_dir_path
+    valid_boundary = any(
+        os.path.commonpath([os.path.realpath(c_root), real_book_dir]) == os.path.realpath(c_root)
+        and real_book_dir != os.path.realpath(c_root)
+        for c_root in candidate_roots
+    )
+    if not valid_boundary or os.path.islink(book_dir_path):
+        raise HTTPException(
+            status_code=400,
+            detail="Security violation: resolved book directory escapes allowed storage roots."
+        )
+
 
     if format.lower() in ("markdown", "md"):
-        md_files = sorted([f for f in os.listdir(book_dir_path) if f.endswith(".md")])
+        md_files = sorted([f for f in os.listdir(real_book_dir) if f.endswith(".md") and not f.startswith(".")])
         if not md_files:
             raise HTTPException(status_code=404, detail="No markdown notes found for this book")
 
@@ -3557,9 +3972,13 @@ async def export_book_snippets(
             f"*Exported on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} for @{username}*\n\n---\n"
         ]
         for idx, md_f in enumerate(md_files, 1):
-            with open(os.path.join(book_dir_path, md_f), "r", encoding="utf-8") as f:
-                content = f.read().strip()
-            combined_lines.append(f"## Bookmark {idx} ({md_f[:-3]})\n\n{content}\n\n---\n")
+            fpath = os.path.join(real_book_dir, md_f)
+            try:
+                async with aiofiles.open(fpath, "r", encoding="utf-8") as f:
+                    content = await f.read()
+            except Exception:
+                content = safe_read_text_file(real_book_dir, md_f) or ""
+            combined_lines.append(f"## Bookmark {idx} ({md_f[:-3]})\n\n{content.strip()}\n\n---\n")
 
         combined_text = "\n".join(combined_lines)
         filename = f"{safe_book_title}_All_Snippets.md"
@@ -3573,12 +3992,15 @@ async def export_book_snippets(
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
         md_files = []
-        for fname in sorted(os.listdir(book_dir_path)):
-            fpath = os.path.join(book_dir_path, fname)
-            if os.path.isfile(fpath):
-                zf.write(fpath, arcname=f"{safe_book_title}/{fname}")
-                if fname.endswith(".md"):
-                    md_files.append(fname)
+        for fname in sorted(os.listdir(real_book_dir)):
+            if fname.startswith("."):
+                continue
+            clean_child = os.path.basename(fname)
+            fpath = os.path.realpath(os.path.join(real_book_dir, clean_child))
+            if os.path.commonpath([real_book_dir, fpath]) == real_book_dir and os.path.isfile(fpath) and not os.path.islink(fpath):
+                zf.write(fpath, arcname=f"{safe_book_title}/{clean_child}")
+                if clean_child.endswith(".md"):
+                    md_files.append(clean_child)
 
         if md_files:
             summary_lines = [
@@ -3586,8 +4008,13 @@ async def export_book_snippets(
                 f"*Exported on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} for @{username}*\n\n"
             ]
             for idx, md_f in enumerate(md_files, 1):
-                with open(os.path.join(book_dir_path, md_f), "r", encoding="utf-8") as f:
-                    summary_lines.append(f"### {idx}. {md_f[:-3]}\n\n{f.read().strip()}\n\n---\n")
+                fpath = os.path.join(real_book_dir, md_f)
+                try:
+                    async with aiofiles.open(fpath, "r", encoding="utf-8") as f:
+                        content = await f.read()
+                except Exception:
+                    content = safe_read_text_file(real_book_dir, md_f) or ""
+                summary_lines.append(f"### {idx}. {md_f[:-3]}\n\n{content.strip()}\n\n---\n")
             zf.writestr(f"{safe_book_title}/ALL_NOTES_COMBINED.md", "\n".join(summary_lines))
 
     zip_bytes = zip_buffer.getvalue()
@@ -3621,12 +4048,21 @@ async def delete_user_bookmark(
     user_id = user["id"]
 
     # Extract metadata sent from the web frontend
-    req_lib_id = request.query_params.get("library_item_id")
+    raw_lib_id = request.query_params.get("library_item_id")
+    req_lib_id = validate_and_sanitize_library_item_id(raw_lib_id)
     req_time_str = request.query_params.get("time")
     req_start_str = request.query_params.get("start_time")
-    req_book_title = request.query_params.get("book_title")
-    req_created_at = request.query_params.get("created_at")
-    req_timestamp = request.query_params.get("timestamp")
+    raw_book_title = request.query_params.get("book_title")
+    req_book_title = sanitize_filename(raw_book_title) if raw_book_title else None
+    raw_created_at = request.query_params.get("created_at")
+    req_created_at = re.sub(r'[\0\r\n\t<>]', '', raw_created_at).strip() if raw_created_at else None
+    raw_ts = request.query_params.get("timestamp")
+    req_timestamp = None
+    if raw_ts:
+        try:
+            req_timestamp = validate_and_sanitize_snippet_timestamp(raw_ts)
+        except Exception:
+            req_timestamp = None
 
     resolved_time = None
     if req_time_str:
@@ -3692,8 +4128,9 @@ async def delete_user_bookmark(
                         if is_match and fname.endswith(".json") and not found_metadata:
                             json_candidate = os.path.join(full_book_path, fname)
                             try:
-                                with open(json_candidate, "r", encoding="utf-8") as jf:
-                                    found_metadata = json.load(jf)
+                                async with aiofiles.open(json_candidate, "r", encoding="utf-8") as jf:
+                                    raw_json = await jf.read()
+                                    found_metadata = json.loads(raw_json)
                             except Exception:
                                 pass
 
@@ -3711,13 +4148,8 @@ async def delete_user_bookmark(
                         )
 
                         if is_match:
-                            file_to_del = os.path.join(full_book_path, fname)
-                            try:
-                                os.remove(file_to_del)
+                            if safe_remove_file_in_directory(full_book_path, fname):
                                 deleted_count += 1
-                                logger.info(f"Deleted bookmark file: {file_to_del}")
-                            except Exception as e:
-                                logger.warning(f"Could not delete {file_to_del}: {e}")
 
                     # Clean up empty book directory if all files deleted
                     try:
@@ -3727,7 +4159,8 @@ async def delete_user_bookmark(
                         pass
 
     # Extract final values for persistent tombstone
-    final_lib_id = req_lib_id or found_metadata.get("library_item_id")
+    meta_lib_id = validate_and_sanitize_library_item_id(found_metadata.get("library_item_id"))
+    final_lib_id = req_lib_id or meta_lib_id
     final_time = resolved_time if resolved_time is not None else found_metadata.get("current_time", found_metadata.get("start_time"))
     if final_time is not None:
         try:
@@ -3760,11 +4193,25 @@ async def delete_user_bookmark(
     )
 
     # Best-effort attempt to remove the bookmark from upstream Audiobookshelf server if permitted
-    if final_lib_id and final_lib_id not in ("N/A", "unknown") and final_time is not None and server_url and raw_token:
+    safe_lib_id = validate_and_sanitize_library_item_id(final_lib_id)
+    if safe_lib_id and final_time is not None and server_url and raw_token:
         try:
-            abs_del_url = f"{server_url.rstrip('/')}/api/me/bookmark/{final_lib_id}/{int(final_time)}"
-            _http_session.delete(abs_del_url, headers={"Authorization": f"Bearer {raw_token}"}, timeout=4)
-            logger.info(f"Notified ABS server to delete bookmark in item {final_lib_id} at {int(final_time)}s")
+            clean_time_int = int(final_time)
+            if 0 <= clean_time_int <= 100000000:
+                base_target = server_url.rstrip("/")
+                # Strictly URL-encode the validated library_item_id to prevent API traversal (CWE-22 / CWE-918)
+                quoted_lib_id = quote(safe_lib_id, safe="")
+                abs_del_url = f"{base_target}/api/me/bookmark/{quoted_lib_id}/{clean_time_int}"
+
+                # Verify URL path strictly adheres to expected endpoint pattern and contains no directory traversal tokens
+                parsed_url = urlsplit(abs_del_url)
+                expected_prefix = f"/api/me/bookmark/{quoted_lib_id}/"
+                if parsed_url.path.startswith(expected_prefix) and ".." not in parsed_url.path:
+                    async with httpx.AsyncClient(timeout=4.0) as client:
+                        await client.delete(abs_del_url, headers={"Authorization": f"Bearer {raw_token}"})
+                    logger.info(f"Notified ABS server to delete bookmark in item {safe_lib_id} at {clean_time_int}s")
+                else:
+                    logger.warning(f"Security: rejected upstream delete URL failing path prefix verification: {abs_del_url}")
         except Exception as abs_err:
             logger.debug(f"Upstream ABS server delete response notice: {abs_err}")
 
@@ -3778,88 +4225,205 @@ async def delete_user_bookmark(
 
 # --- Static Audio & Markdown File Serving ---
 
+def validate_and_sanitize_serve_filename(raw_filename: Optional[str]) -> str:
+    """
+    Validates and sanitizes user-supplied bookmark filename, strictly preventing
+    Path Traversal (CWE-22) and Filesystem Oracle (CWE-209/CWE-200).
+    Only allows alphanumeric and safe punctuation characters with .mp3, .md, .json, or .txt extensions.
+    """
+    if not raw_filename or not isinstance(raw_filename, str):
+        raise HTTPException(status_code=400, detail="Filename parameter is required.")
+
+    clean_filename = raw_filename.strip()
+    if not clean_filename or len(clean_filename) > 255:
+        raise HTTPException(status_code=400, detail="Invalid filename length.")
+
+    if any(sep in clean_filename for sep in ("/", "\\", "\0", "\r", "\n", "\t")):
+        raise HTTPException(status_code=400, detail="Security violation: filename contains path separators or control characters.")
+
+    if ".." in clean_filename or clean_filename.startswith("."):
+        raise HTTPException(status_code=400, detail="Security violation: filename contains directory navigation tokens.")
+
+    base_name = os.path.basename(clean_filename)
+    if base_name != clean_filename:
+        raise HTTPException(status_code=400, detail="Security violation: filename must be a base filename.")
+
+    # Restrict to legitimate bookmark file formats (.mp3, .md, .json, .txt) with safe filename characters
+    if not re.match(r"^[a-zA-Z0-9_\- .',!:?()\[\]]+\.(mp3|md|json|txt)$", clean_filename, re.IGNORECASE):
+        raise HTTPException(status_code=400, detail="Security violation: filename contains unsupported characters or disallowed extension.")
+
+    return clean_filename
+
+
+def validate_and_sanitize_serve_username(raw_username: Optional[str]) -> str:
+    """
+    Validates and sanitizes username parameter for bookmark file serving,
+    preventing path injection and invalid character abuse.
+    """
+    if not raw_username or not isinstance(raw_username, str):
+        raise HTTPException(status_code=400, detail="Username parameter is required.")
+
+    clean_username = raw_username.strip()
+    if not clean_username or len(clean_username) > 100:
+        raise HTTPException(status_code=400, detail="Invalid username length.")
+
+    if any(sep in clean_username for sep in ("/", "\\", "\0", "\r", "\n", "\t")):
+        raise HTTPException(status_code=400, detail="Security violation: username contains illegal path characters.")
+
+    if ".." in clean_username or clean_username.startswith("."):
+        raise HTTPException(status_code=400, detail="Security violation: username contains directory navigation tokens.")
+
+    if not re.match(r"^[a-zA-Z0-9_\- .@]+$", clean_username):
+        raise HTTPException(status_code=400, detail="Security violation: username contains invalid characters.")
+
+    sanitized = sanitize_filename(clean_username)
+    if not sanitized or sanitized.startswith(".") or "/" in sanitized or "\\" in sanitized or ".." in sanitized:
+        raise HTTPException(status_code=400, detail="Invalid username after normalization.")
+    return sanitized
+
+
 @app.get("/bookmarks/{username}/{book_title}/{filename}")
 @app.get("/snippets/{username}/{book_title}/{filename}")
 async def serve_bookmark_file(username: str, book_title: str, filename: str):
     """
     Serves the generated MP3 audio clip, Markdown transcript, or JSON metadata.
-    Searches across all candidate volume roots and case variations.
+    Discovers candidate book directories and matching bookmark files strictly via
+    server-side filesystem enumeration over authorized candidate roots.
+    Eliminates Filesystem Oracle (CWE-209/CWE-200) and Path Traversal (CWE-22) vulnerabilities
+    by completely isolating user input from filesystem path construction and probing APIs.
     Supports HTTP Range requests so audio players and web browsers can stream audio smoothly with seeking.
     """
-    safe_username = sanitize_filename(username)
-    safe_book_title = sanitize_filename(book_title)
-    safe_filename = os.path.basename(filename)
+    safe_username = validate_and_sanitize_serve_username(username)
+    safe_book_title = validate_and_sanitize_export_book_title(book_title)
+    target_filename = validate_and_sanitize_serve_filename(filename)
+    target_clean = re.sub(r'[^a-zA-Z0-9]+', '', safe_book_title).lower()
 
     candidate_roots = get_candidate_volume_dirs()
-    user_variants = list(dict.fromkeys([safe_username, safe_username.lower(), safe_username.capitalize()]))
+    user_search_names = list(dict.fromkeys([
+        safe_username,
+        safe_username.lower(),
+        safe_username.capitalize(),
+        "default_user"
+    ]))
 
-    file_path = None
+    matched_file_path: Optional[str] = None
+    matched_filename: Optional[str] = None
+
+    # Discover candidate book directory and matching file strictly via server-side enumeration.
+    # User input is never joined with filesystem roots to construct query paths or probe os.path.isfile() (eliminates Filesystem Oracle).
     for root in candidate_roots:
-        if not os.path.isdir(root):
+        real_root = os.path.realpath(root)
+        if not os.path.isdir(real_root):
             continue
-        # Also discover any folder in root matching case-insensitively
-        for existing in os.listdir(root):
-            if existing.lower() == safe_username.lower() and existing not in user_variants:
-                user_variants.append(existing)
 
-        for u in user_variants:
-            # 1. Primary: {root}/{u}/bookmarks/{book_title}/{filename}
-            p = os.path.join(root, u, "bookmarks", safe_book_title, safe_filename)
-            if os.path.isfile(p):
-                file_path = p
-                break
+        # Also discover existing username folders matching case-insensitively
+        try:
+            for existing_entry in os.listdir(real_root):
+                if existing_entry.lower() == safe_username.lower() and existing_entry not in user_search_names:
+                    user_search_names.append(existing_entry)
+        except OSError:
+            pass
 
-            # 2. Case-insensitive and space/underscore book folder check under bookmarks/
-            bm_parent = os.path.join(root, u, "bookmarks")
-            if os.path.isdir(bm_parent):
-                for b_sub in os.listdir(bm_parent):
-                    sub_norm = b_sub.replace("_", " ").strip().lower()
-                    req_norm = safe_book_title.replace("_", " ").strip().lower()
-                    if sub_norm == req_norm or b_sub.lower() == safe_book_title.lower():
-                        p_sub = os.path.join(bm_parent, b_sub, safe_filename)
-                        if os.path.isfile(p_sub):
-                            file_path = p_sub
-                            break
-            if file_path:
-                break
+        # Collect legitimate candidate parent folders within real_root
+        candidate_parent_dirs = []
+        for u in user_search_names:
+            candidate_parent_dirs.extend([
+                os.path.join(real_root, u, "bookmarks"),
+                os.path.join(real_root, u),
+                os.path.join(real_root, "snippets", u),
+            ])
+        candidate_parent_dirs.extend([
+            os.path.join(real_root, "bookmarks"),
+            os.path.join(real_root, "snippets"),
+            real_root
+        ])
 
-            # 3. Direct: {root}/{u}/{book_title}/{filename}
-            p = os.path.join(root, u, safe_book_title, safe_filename)
-            if os.path.isfile(p):
-                file_path = p
-                break
-            # 3b. Case/space direct check
-            u_dir = os.path.join(root, u)
-            if os.path.isdir(u_dir):
-                for b_sub in os.listdir(u_dir):
-                    if b_sub.lower() in ("bookmarks", "snippets"):
+        for parent_dir in candidate_parent_dirs:
+            if not os.path.isdir(parent_dir):
+                continue
+            real_parent = os.path.realpath(parent_dir)
+            if os.path.commonpath([real_root, real_parent]) != real_root:
+                continue
+
+            # Enumerate legitimate subdirectories inside real_parent to find matching book folder
+            try:
+                entries = sorted(os.listdir(real_parent))
+            except OSError:
+                continue
+
+            for b_entry in entries:
+                if b_entry.startswith("."):
+                    continue
+                clean_b_entry = os.path.basename(b_entry)
+                entry_book_dir = os.path.realpath(os.path.join(real_parent, clean_b_entry))
+                if os.path.commonpath([real_parent, entry_book_dir]) != real_parent or os.path.islink(entry_book_dir):
+                    continue
+                if not os.path.isdir(entry_book_dir):
+                    continue
+
+                # Match book folder name strictly via string comparison against validated title
+                clean_entry = re.sub(r'[^a-zA-Z0-9]+', '', clean_b_entry).lower()
+                is_book_match = (
+                    clean_b_entry.lower() == safe_book_title.lower() or
+                    (clean_entry and clean_entry == target_clean) or
+                    clean_b_entry.replace("_", " ").strip().lower() == safe_book_title.replace("_", " ").strip().lower()
+                )
+                if not is_book_match and clean_entry and target_clean:
+                    if len(target_clean) >= 8 and (clean_entry.startswith(target_clean[:20]) or target_clean.startswith(clean_entry)):
+                        is_book_match = True
+
+                if not is_book_match:
+                    continue
+
+                # Once verified book folder is located, enumerate its files to find matching bookmark file
+                try:
+                    f_entries = sorted(os.listdir(entry_book_dir))
+                except OSError:
+                    continue
+
+                for f_entry in f_entries:
+                    if f_entry.startswith("."):
                         continue
-                    sub_norm = b_sub.replace("_", " ").strip().lower()
-                    req_norm = safe_book_title.replace("_", " ").strip().lower()
-                    if sub_norm == req_norm or b_sub.lower() == safe_book_title.lower():
-                        p_sub = os.path.join(u_dir, b_sub, safe_filename)
-                        if os.path.isfile(p_sub):
-                            file_path = p_sub
-                            break
-            if file_path:
-                break
+                    clean_f_entry = os.path.basename(f_entry)
+                    entry_file_path = os.path.realpath(os.path.join(entry_book_dir, clean_f_entry))
+                    if os.path.commonpath([entry_book_dir, entry_file_path]) != entry_book_dir or os.path.islink(entry_file_path):
+                        continue
+                    if not os.path.isfile(entry_file_path):
+                        continue
 
-            # 4. Snippets fallback: {root}/snippets/{u}/{book_title}/{filename}
-            p = os.path.join(root, "snippets", u, safe_book_title, safe_filename)
-            if os.path.isfile(p):
-                file_path = p
+                    # Defensive check: only allow safe extensions
+                    if not any(clean_f_entry.lower().endswith(ext) for ext in (".mp3", ".md", ".json", ".txt")):
+                        continue
+
+                    # Match file name strictly via string comparison against validated target_filename
+                    if clean_f_entry.lower() == target_filename.lower():
+                        matched_file_path = entry_file_path
+                        matched_filename = clean_f_entry
+                        break
+
+                if matched_file_path:
+                    break
+            if matched_file_path:
                 break
-        if file_path:
+        if matched_file_path:
             break
 
-    if not file_path or not os.path.isfile(file_path):
+    if not matched_file_path or not os.path.isfile(matched_file_path):
         raise HTTPException(status_code=404, detail="Requested audio or transcript file was not found")
 
-    media_type = "audio/mpeg" if safe_filename.endswith(".mp3") else ("application/json" if safe_filename.endswith(".json") else "text/markdown")
+    ext = os.path.splitext(matched_filename)[1].lower()
+    media_type_map = {
+        ".mp3": "audio/mpeg",
+        ".json": "application/json",
+        ".md": "text/markdown; charset=utf-8",
+        ".txt": "text/plain; charset=utf-8",
+    }
+    media_type = media_type_map.get(ext, "application/octet-stream")
+
     response = FileResponse(
-        file_path,
+        matched_file_path,
         media_type=media_type,
-        filename=safe_filename
+        filename=matched_filename
     )
     response.headers["Accept-Ranges"] = "bytes"
     response.headers["Access-Control-Allow-Origin"] = "*"
@@ -3942,8 +4506,8 @@ async def render_extractor_dashboard(
                                 mp3_path = os.path.join(full_book_path, f"{base_name}.mp3")
 
                                 try:
-                                    with open(md_path, "r", encoding="utf-8") as f:
-                                        raw_md = f.read()
+                                    async with aiofiles.open(md_path, "r", encoding="utf-8") as f:
+                                        raw_md = await f.read()
                                     parsed = parse_frontmatter(raw_md)
                                 except Exception:
                                     parsed = {"body": ""}
@@ -4068,11 +4632,14 @@ if __name__ == "__main__":
     import uvicorn
     # Default sidecar port is 13380 (SIDECAR_PORT is prioritized over PORT so it does not conflict if PORT is set to 13379 for the web dashboard)
     port = int(os.environ.get("SIDECAR_PORT") or os.environ.get("PORT") or "13380")
+    # Configurable host binding: defaults to 127.0.0.1 for secure localhost binding,
+    # or reads from HOST environment variable (e.g. "0.0.0.0" for Docker or LAN deployments)
+    host = os.environ.get("HOST") or os.environ.get("BIND_ADDRESS") or "127.0.0.1"
     # Do not reload by default to avoid watching parent directories (e.g. /home/pi)
     reload_enabled = os.environ.get("RELOAD", "false").lower() in ("true", "1", "yes")
     uvicorn.run(
         "main:app",
-        host="0.0.0.0",
+        host=host,
         port=port,
         reload=reload_enabled,
         reload_dirs=[BASE_DIR] if reload_enabled else None,

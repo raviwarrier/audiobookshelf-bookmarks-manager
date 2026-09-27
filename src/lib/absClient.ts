@@ -1,4 +1,5 @@
 import { AbsActiveSession, AbsUser, Snippet } from '../types';
+import { sanitizeStoredUrl } from './authStorage';
 
 export interface AbsAuthResult {
   token: string;
@@ -6,9 +7,12 @@ export interface AbsAuthResult {
 }
 
 function normalizeServerUrl(url: string): string {
-  let clean = url.trim().replace(/\/+$/, '');
-  if (!clean.startsWith('http://') && !clean.startsWith('https://')) {
-    clean = `https://${clean}`;
+  if (!url || typeof url !== 'string') {
+    throw new Error('Server URL is required');
+  }
+  const clean = sanitizeStoredUrl(url);
+  if (!clean) {
+    throw new Error('Invalid Audiobookshelf server URL format.');
   }
   return clean;
 }
@@ -74,8 +78,9 @@ export function formatAuthors(
 }
 
 /**
- * Universal fetch wrapper that can route requests through the local backend proxy
- * (/api/proxy/abs) to completely bypass browser CORS limitations, or direct fetch.
+ * Universal fetch wrapper that routes requests exclusively through the local backend proxy
+ * (/api/proxy/abs) to completely eliminate browser CORS limitations and prevent
+ * Client-Side Request Forgery (CWE-918).
  */
 async function absFetch(
   targetUrl: string,
@@ -86,90 +91,48 @@ async function absFetch(
   } = {},
   useProxy: boolean = true
 ): Promise<{ ok: boolean; status: number; data: any }> {
-  // If target is localhost/127.0.0.1 and app is hosted on a cloud domain,
-  // the cloud proxy cannot reach the user's local machine; use direct browser fetch instead.
-  const isTargetLocal = targetUrl.includes('localhost') || targetUrl.includes('127.0.0.1') || targetUrl.includes('0.0.0.0');
-  const isHosted = typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1';
-  const effectiveUseProxy = useProxy && !(isTargetLocal && isHosted);
-
-  if (effectiveUseProxy) {
-    try {
-      const res = await fetch('/api/proxy/abs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          targetUrl,
-          method: options.method || 'GET',
-          headers: options.headers || {},
-          body: options.body,
-        }),
-      });
-
-      const json = await res.json();
-      if (!res.ok) {
-        throw new Error(json.message || json.error || `Proxy error (HTTP ${res.status})`);
-      }
-
-      return {
-        ok: json.ok,
-        status: json.status,
-        data: json.data,
-      };
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Backend proxy request failed';
-
-      // Resilient fallback: If the backend proxy fails, attempt direct browser fetch
-      // in case the target server allows CORS natively (e.g. Cloudflare / reverse proxy).
-      if (!isTargetLocal) {
-        try {
-          const directRes = await fetch(targetUrl, {
-            method: options.method || 'GET',
-            headers: options.headers,
-            body: options.body ? JSON.stringify(options.body) : undefined,
-          });
-
-          const isJson = directRes.headers.get('content-type')?.includes('application/json');
-          const data = isJson ? await directRes.json() : await directRes.text();
-
-          return {
-            ok: directRes.ok,
-            status: directRes.status,
-            data,
-          };
-        } catch {
-          // Fallback also failed; throw original proxy error
-        }
-      }
-
-      throw new Error(`Proxy error contacting ${targetUrl}: ${msg}`);
-    }
+  let cleanTarget = targetUrl.trim();
+  if (!cleanTarget.startsWith('http://') && !cleanTarget.startsWith('https://')) {
+    cleanTarget = `https://${cleanTarget}`;
   }
 
-  // Direct fetch (subject to browser CORS)
-  try {
-    const res = await fetch(targetUrl, {
+  const parsed = new URL(cleanTarget);
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error('Invalid URL protocol: only http and https are permitted');
+  }
+  if (
+    parsed.hostname === '169.254.169.254' ||
+    parsed.hostname.startsWith('169.254.') ||
+    parsed.hostname === 'metadata.google.internal' ||
+    parsed.hostname === 'metadata'
+  ) {
+    throw new Error('Security violation: metadata endpoints are forbidden.');
+  }
+
+  // Route securely via the trusted backend proxy (/api/proxy/abs).
+  // This completely prevents Client-Side Request Forgery (CWE-918), bypasses browser CORS,
+  // and prevents user tokens from being exposed to direct cross-origin fetches.
+  const res = await fetch('/api/proxy/abs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      targetUrl: cleanTarget,
       method: options.method || 'GET',
-      headers: options.headers,
-      body: options.body ? JSON.stringify(options.body) : undefined,
-    });
+      headers: options.headers || {},
+      body: options.body,
+    }),
+  });
 
-    const isJson = res.headers.get('content-type')?.includes('application/json');
-    const data = isJson ? await res.json() : await res.text();
-
-    return {
-      ok: res.ok,
-      status: res.status,
-      data,
-    };
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : 'Network error';
-    if (msg.includes('Failed to fetch') || msg.includes('NetworkError')) {
-      throw new Error(
-        `Browser CORS restriction: Cannot reach ${targetUrl}. Enable 'Server Proxy' or configure CORS on your reverse proxy.`
-      );
-    }
-    throw err;
+  const json = await res.json();
+  if (!res.ok) {
+    throw new Error(json.message || json.error || `Proxy error (HTTP ${res.status})`);
   }
+
+  return {
+    ok: json.ok,
+    status: json.status,
+    data: json.data,
+  };
 }
 
 /**

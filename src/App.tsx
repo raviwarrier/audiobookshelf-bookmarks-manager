@@ -6,7 +6,8 @@ import { AuthModal } from './components/AuthModal';
 import { AbsUser, AbsActiveSession, Snippet, SyncState } from './types';
 import { wipeSessionKey } from './lib/crypto';
 import { authenticateAbs, fetchActiveSession, formatAuthors } from './lib/absClient';
-import { getStoredCredentials, saveStoredCredentials, clearStoredCredentials } from './lib/authStorage';
+import { getStoredCredentials, saveStoredCredentials, clearStoredCredentials, sanitizeStoredUrl } from './lib/authStorage';
+import { safeSidecarFetch } from './lib/safeFetch';
 import { CheckCircle2, X, Bell } from 'lucide-react';
 
 // Helper to determine initial default sidecar URL
@@ -18,6 +19,41 @@ function getDefaultSidecarUrl(): string {
     }
   }
   return 'http://localhost:13380';
+}
+
+/**
+ * Safely constructs an API endpoint URL from a base URL and an endpoint path.
+ * Enforces strictly relative same-origin paths, preventing CSRF / SSRF / arbitrary redirection (CWE-918).
+ */
+export function buildSafeEndpoint(baseUrl: string, endpointPath: string): string {
+  const cleanPath = endpointPath.startsWith('/') ? endpointPath : `/${endpointPath}`;
+  if (cleanPath.includes('..') || cleanPath.includes('\\') || cleanPath.startsWith('//')) {
+    return '/api/user/bookmarks';
+  }
+  // Guarantee relative same-origin path to prevent Client-Side Request Forgery
+  return cleanPath;
+}
+
+/**
+ * Validates and sanitizes sync state received from remote endpoints,
+ * preventing tainted data propagation and DOM injection from compromised servers.
+ */
+export function sanitizeSyncState(raw: any): SyncState | null {
+  if (!raw || typeof raw !== 'object') return null;
+  return {
+    is_syncing: Boolean(raw.is_syncing),
+    last_synced_at: typeof raw.last_synced_at === 'string' ? raw.last_synced_at.slice(0, 64).replace(/[<>"']/g, '') : null,
+    total_synced: typeof raw.total_synced === 'number' && Number.isFinite(raw.total_synced) ? raw.total_synced : 0,
+    current_item: typeof raw.current_item === 'string' ? raw.current_item.slice(0, 200).replace(/[<>"']/g, '') : null,
+    last_error: typeof raw.last_error === 'string' ? raw.last_error.slice(0, 500).replace(/[<>"']/g, '') : null,
+    installation_date: typeof raw.installation_date === 'string' && /^[0-9T:\-.]+$/.test(raw.installation_date) ? raw.installation_date : undefined,
+    cutoff_datetime: typeof raw.cutoff_datetime === 'string' && /^[0-9T:\-.]+$/.test(raw.cutoff_datetime) ? raw.cutoff_datetime : undefined,
+    cutoff_mode: ['from_start', 'custom_date', 'from_now'].includes(raw.cutoff_mode) ? raw.cutoff_mode : undefined,
+    custom_cutoff_date: typeof raw.custom_cutoff_date === 'string' && /^[0-9T:\-.]+$/.test(raw.custom_cutoff_date) ? raw.custom_cutoff_date : undefined,
+    installed_at: typeof raw.installed_at === 'string' && /^[0-9T:\-.]+$/.test(raw.installed_at) ? raw.installed_at : undefined,
+    skipped_before_cutoff: typeof raw.skipped_before_cutoff === 'number' && Number.isFinite(raw.skipped_before_cutoff) ? raw.skipped_before_cutoff : 0,
+    skipped_tombstoned: typeof raw.skipped_tombstoned === 'number' && Number.isFinite(raw.skipped_tombstoned) ? raw.skipped_tombstoned : 0,
+  };
 }
 
 // Resolves audio URL so that clients accessing externally or through a domain
@@ -120,39 +156,20 @@ export function App() {
     setIsLoadingBookmarks(true);
 
     try {
-      const endpoint = `${targetSidecar.replace(/\/+$/, '')}/api/user/bookmarks`;
       let bookmarksList: any[] = [];
-      const currentServer = serverUrlRef.current;
+      const res = await safeSidecarFetch('/api/user/bookmarks', {
+        method: 'GET',
+        token,
+        serverUrl: serverUrlRef.current,
+        sidecarUrl: targetSidecar,
+        useProxy: proxyEnabled,
+      });
 
-      if (proxyEnabled) {
-        const res = await fetch('/api/proxy/abs', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            targetUrl: endpoint,
-            method: 'GET',
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'X-ABS-Server-Url': currentServer,
-            }
-          })
-        });
+      if (res.ok) {
         const json = await res.json();
-        if (json.ok && json.data && Array.isArray(json.data.bookmarks)) {
-          bookmarksList = json.data.bookmarks;
-        }
-      } else {
-        const res = await fetch(endpoint, {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'X-ABS-Server-Url': currentServer,
-          }
-        });
-        if (res.ok) {
-          const data = await res.json();
-          if (data && Array.isArray(data.bookmarks)) {
-            bookmarksList = data.bookmarks;
-          }
+        const rawList = json?.bookmarks || json?.data?.bookmarks || (Array.isArray(json) ? json : []);
+        if (Array.isArray(rawList)) {
+          bookmarksList = rawList;
         }
       }
 
@@ -313,9 +330,11 @@ export function App() {
         const res = await fetch('/api/config');
         const cfg = await res.json();
         if (cfg?.ok) {
-          const cfgDefault = cfg.defaultAbsUrl && !cfg.defaultAbsUrl.includes('abs.example.com') && !isLocalOrPlaceholder(cfg.defaultAbsUrl) ? cfg.defaultAbsUrl : '';
-          const cfgTarget = cfg.absTargetServer && cfg.absTargetServer !== 'http://audiobookshelf:80' && !cfg.absTargetServer.includes('abs.example.com') && !isLocalOrPlaceholder(cfg.absTargetServer) ? cfg.absTargetServer : '';
-          const detected = cfgDefault || cfgTarget || (cfg.defaultAbsUrl && !cfg.defaultAbsUrl.includes('abs.example.com') ? cfg.defaultAbsUrl : '');
+          const rawDefault = sanitizeStoredUrl(cfg.defaultAbsUrl);
+          const rawTarget = sanitizeStoredUrl(cfg.absTargetServer);
+          const cfgDefault = rawDefault && !rawDefault.includes('abs.example.com') && !isLocalOrPlaceholder(rawDefault) ? rawDefault : '';
+          const cfgTarget = rawTarget && rawTarget !== 'http://audiobookshelf:80' && !rawTarget.includes('abs.example.com') && !isLocalOrPlaceholder(rawTarget) ? rawTarget : '';
+          const detected = sanitizeStoredUrl(cfgDefault || cfgTarget || (rawDefault && !rawDefault.includes('abs.example.com') ? rawDefault : ''));
           if (detected) {
             initialServer = detected;
             setDefaultServerUrl(detected);
@@ -323,7 +342,10 @@ export function App() {
             serverUrlRef.current = detected;
           }
           if (cfg.sidecarUrl) {
-            initialSidecar = cfg.sidecarUrl;
+            const cleanSidecar = sanitizeStoredUrl(cfg.sidecarUrl);
+            if (cleanSidecar) {
+              initialSidecar = cleanSidecar;
+            }
           }
           if (cfg.useBackendProxy !== undefined) {
             initialProxy = Boolean(cfg.useBackendProxy);
@@ -337,11 +359,11 @@ export function App() {
 
       // 2. Check if user previously saved credentials on this device
       const saved = getStoredCredentials();
-      const savedServer = saved?.serverUrl && !isLocalOrPlaceholder(saved.serverUrl) ? saved.serverUrl : '';
+      const savedServer = saved?.serverUrl && !isLocalOrPlaceholder(saved.serverUrl) ? sanitizeStoredUrl(saved.serverUrl) : '';
       if (saved && (saved.token || (saved.username && saved.password))) {
         try {
-          const targetServerToUse = initialServer || savedServer || '';
-          const targetSidecarToUse = saved.sidecarUrl || initialSidecar;
+          const targetServerToUse = sanitizeStoredUrl(initialServer || savedServer || '');
+          const targetSidecarToUse = sanitizeStoredUrl(saved.sidecarUrl || initialSidecar) || initialSidecar;
           const proxyToUse = saved.useProxy !== undefined ? saved.useProxy : initialProxy;
           const authModeToUse = saved.token ? 'token' : saved.authMode;
 
@@ -411,50 +433,36 @@ export function App() {
       }
 
       try {
-        const endpoint = `${sidecarUrl.replace(/\/+$/, '')}/api/user/bookmarks/status`;
         let statusData: any = null;
+        const res = await safeSidecarFetch('/api/user/bookmarks/status', {
+          method: 'GET',
+          token: activeToken,
+          serverUrl,
+          sidecarUrl,
+          useProxy,
+        });
 
-        if (useProxy) {
-          const res = await fetch('/api/proxy/abs', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              targetUrl: endpoint,
-              method: 'GET',
-              headers: {
-                'Authorization': `Bearer ${activeToken}`,
-                'X-ABS-Server-Url': serverUrl,
-              }
-            })
-          });
+        if (res.ok) {
           const json = await res.json();
-          if (json.ok && json.data) {
-            statusData = json.data;
-          }
-        } else {
-          const res = await fetch(endpoint, {
-            headers: {
-              'Authorization': `Bearer ${activeToken}`,
-              'X-ABS-Server-Url': serverUrl,
-            }
-          });
-          if (res.ok) {
-            statusData = await res.json();
-          }
+          statusData = json?.data || json;
         }
 
         if (statusData && statusData.sync_state) {
           const wasSyncing = syncState?.is_syncing;
-          setSyncState(statusData.sync_state);
-          // If sync just completed, refresh the snippet list immediately
-          if (wasSyncing && !statusData.sync_state.is_syncing) {
-            await syncUserBookmarks(sidecarUrl, activeToken, user.username, useProxy);
+          const cleanSync = sanitizeSyncState(statusData.sync_state);
+          if (cleanSync) {
+            setSyncState(cleanSync);
+            // If sync just completed, refresh the snippet list immediately
+            if (wasSyncing && !cleanSync.is_syncing) {
+              await syncUserBookmarks(sidecarUrl, activeToken, user.username, useProxy);
+            }
           }
         }
 
         if (statusData && Array.isArray(statusData.recent) && statusData.recent.length > 0) {
           const latestEvent = statusData.recent[statusData.recent.length - 1];
-          const eventId = latestEvent?.timestamp;
+          const rawTs = latestEvent?.timestamp;
+          const eventId = typeof rawTs === 'string' && /^[a-zA-Z0-9_\-]+$/.test(rawTs) ? rawTs : null;
           if (eventId && !notifiedIdsRef.current.has(eventId)) {
             // Mark as notified immediately to prevent duplicate triggers
             notifiedIdsRef.current.add(eventId);
@@ -463,11 +471,15 @@ export function App() {
             // Trigger background bookmark refresh
             await syncUserBookmarks(sidecarUrl, activeToken, user.username, useProxy);
             
-            // Show toast notification exactly once
+            // Show toast notification exactly once with sanitized title
             const methodLabel = latestEvent.extraction_method === 'intercepted' ? 'mobile bookmark' : 'snippet';
+            const safeBookTitle = typeof latestEvent.book_title === 'string'
+              ? latestEvent.book_title.replace(/[<>"']/g, '').slice(0, 100)
+              : 'Audiobook';
+
             setNotification({
               id: eventId,
-              message: `New ${methodLabel} ready: "${latestEvent.book_title || 'Audiobook'}" (${eventId})`,
+              message: `New ${methodLabel} ready: "${safeBookTitle}" (${eventId})`,
             });
 
             if (notificationTimeoutRef.current) {
@@ -515,29 +527,13 @@ export function App() {
     if (!activeToken || !user || isTriggeringSync) return;
     setIsTriggeringSync(true);
     try {
-      const endpoint = `${sidecarUrl.replace(/\/+$/, '')}/api/user/sync-bookmarks`;
-      if (useProxy) {
-        await fetch('/api/proxy/abs', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            targetUrl: endpoint,
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${activeToken}`,
-              'X-ABS-Server-Url': serverUrl,
-            }
-          })
-        });
-      } else {
-        await fetch(endpoint, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${activeToken}`,
-            'X-ABS-Server-Url': serverUrl,
-          }
-        });
-      }
+      await safeSidecarFetch('/api/user/sync-bookmarks', {
+        method: 'POST',
+        token: activeToken,
+        serverUrl,
+        sidecarUrl,
+        useProxy,
+      });
       // Refresh local snippet list
       await syncUserBookmarks(sidecarUrl, activeToken, user.username, useProxy);
     } catch (e) {
@@ -590,7 +586,7 @@ export function App() {
     const target = snippetToDelete || snippets.find((s) => s.id === id);
     setSnippets((prev) => prev.filter((s) => s.id !== id));
 
-    if (activeToken && sidecarUrl) {
+    if (activeToken) {
       try {
         const queryParams = new URLSearchParams();
         if (target?.libraryItemId) queryParams.set('library_item_id', target.libraryItemId);
@@ -602,30 +598,13 @@ export function App() {
         if (target?.createdAt) queryParams.set('created_at', String(target.createdAt));
 
         const qs = queryParams.toString() ? `?${queryParams.toString()}` : '';
-        const endpoint = `${sidecarUrl.replace(/\/+$/, '')}/api/user/bookmarks/${encodeURIComponent(id)}${qs}`;
-
-        if (useProxy) {
-          await fetch('/api/proxy/abs', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              targetUrl: endpoint,
-              method: 'DELETE',
-              headers: {
-                'Authorization': `Bearer ${activeToken}`,
-                'X-ABS-Server-Url': serverUrl,
-              }
-            })
-          });
-        } else {
-          await fetch(endpoint, {
-            method: 'DELETE',
-            headers: {
-              'Authorization': `Bearer ${activeToken}`,
-              'X-ABS-Server-Url': serverUrl,
-            }
-          });
-        }
+        await safeSidecarFetch(`/api/user/bookmarks/${encodeURIComponent(id)}${qs}`, {
+          method: 'DELETE',
+          token: activeToken,
+          serverUrl,
+          sidecarUrl,
+          useProxy,
+        });
       } catch (err) {
         console.warn('Notice deleting bookmark from disk:', err);
       }

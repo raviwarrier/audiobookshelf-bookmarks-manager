@@ -37,14 +37,14 @@ EXISTING_PRE_ROLL="30"
 EXISTING_INTERCEPT_DURATION="60"
 EXISTING_INTERCEPT_PRE_ROLL="30"
 
-if [ -f "$ENV_FILE" ]; then
+if [[ -f "$ENV_FILE" ]]; then
     echo -e "${BLUE}[i] Found existing .env file. Loading current values as defaults...${NC}\n"
     # Safely source existing variables without executing arbitrary code
-    while IFS='=' read -r key value || [ -n "$key" ]; do
+    while IFS='=' read -r key value || [[ -n "$key" ]]; do
         key=$(echo "$key" | tr -d '[:space:]')
         # Remove comments and empty lines
         [[ "$key" =~ ^#.* ]] && continue
-        [ -z "$key" ] && continue
+        [[ -z "$key" ]] && continue
         # Strip surrounding quotes
         val=$(echo "$value" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")
         case "$key" in
@@ -62,7 +62,7 @@ if [ -f "$ENV_FILE" ]; then
     done < "$ENV_FILE"
 fi
 
-if [ -n "$EXISTING_ABS_SERVER" ] && [[ "$EXISTING_ABS_SERVER" == *"abs.example.com"* ]]; then
+if [[ -n "$EXISTING_ABS_SERVER" && "$EXISTING_ABS_SERVER" == *"abs.example.com"* ]]; then
     EXISTING_ABS_SERVER="http://localhost:13378"
 fi
 
@@ -89,7 +89,7 @@ read -rp "   Directory path [$EXISTING_VOLUME_DIR]: " INPUT_VOLUME_DIR
 VOLUME_DIR="${INPUT_VOLUME_DIR:-$EXISTING_VOLUME_DIR}"
 
 # Create directory if it doesn't exist
-if [ ! -d "$VOLUME_DIR" ]; then
+if [[ ! -d "$VOLUME_DIR" ]]; then
     echo -e "   Directory '${VOLUME_DIR}' does not exist. Creating..."
     mkdir -p "$VOLUME_DIR" || {
         echo -e "   ${RED}Warning: Could not create ${VOLUME_DIR}. You may need sudo permissions.${NC}"
@@ -115,7 +115,7 @@ echo -e "   ${YELLOW}(Default ports 3000 and 8080 are NOT used on your productio
 while true; do
     read -rp "   Python Sidecar & Interceptor Port [$EXISTING_SIDECAR_PORT]: " INPUT_SIDECAR_PORT
     SIDECAR_PORT="${INPUT_SIDECAR_PORT:-$EXISTING_SIDECAR_PORT}"
-    if [ "$SIDECAR_PORT" = "13378" ]; then
+    if [[ "$SIDECAR_PORT" == "13378" ]]; then
         echo -e "   ${RED}[!] Port 13378 is reserved for Audiobookshelf. Please choose a different port (e.g. 13380 or 13377).${NC}"
     else
         break
@@ -126,9 +126,9 @@ done
 while true; do
     read -rp "   Web Dashboard & UI Port [$EXISTING_WEB_PORT]: " INPUT_WEB_PORT
     WEB_PORT="${INPUT_WEB_PORT:-$EXISTING_WEB_PORT}"
-    if [ "$WEB_PORT" = "13378" ]; then
+    if [[ "$WEB_PORT" == "13378" ]]; then
         echo -e "   ${RED}[!] Port 13378 is reserved for Audiobookshelf. Please choose a different port (e.g. 13379 or 13376).${NC}"
-    elif [ "$WEB_PORT" = "$SIDECAR_PORT" ]; then
+    elif [[ "$WEB_PORT" == "$SIDECAR_PORT" ]]; then
         echo -e "   ${RED}[!] Web port cannot be the same as Sidecar port ($SIDECAR_PORT). Please choose a unique port.${NC}"
     else
         break
@@ -195,7 +195,7 @@ chmod 600 "$ENV_FILE"
 # 8. Verify .gitignore protection
 echo -e "${BLUE}[*] Verifying Git privacy protection...${NC}"
 GITIGNORE_FILE="$SCRIPT_DIR/.gitignore"
-if [ -f "$GITIGNORE_FILE" ]; then
+if [[ -f "$GITIGNORE_FILE" ]]; then
     for ig in ".env" ".env.*" "venv/" "installation_date.json" ".installation_date.json" ".deleted_tombstones.json"; do
         if ! grep -q "^$ig$" "$GITIGNORE_FILE"; then
             echo "$ig" >> "$GITIGNORE_FILE"
@@ -207,7 +207,7 @@ fi
 # 9. Automatic Virtual Environment (venv is default mode) & Package Setup
 echo -e "\n${BLUE}[*] Initializing Python Virtual Environment (Default Mode)...${NC}"
 VENV_DIR="$SCRIPT_DIR/venv"
-if [ ! -f "$VENV_DIR/bin/python3" ]; then
+if [[ ! -f "$VENV_DIR/bin/python3" ]]; then
     echo -e "   Creating virtual environment at ${CYAN}$VENV_DIR${NC}..."
     if ! python3 -m venv "$VENV_DIR" 2>/dev/null; then
         echo -e "   ${YELLOW}python3 -m venv failed. Attempting to install python3-venv via apt...${NC}"
@@ -218,7 +218,7 @@ if [ ! -f "$VENV_DIR/bin/python3" ]; then
     fi
 fi
 
-if [ -f "$VENV_DIR/bin/python3" ]; then
+if [[ -f "$VENV_DIR/bin/python3" ]]; then
     VENV_PYTHON="$VENV_DIR/bin/python3"
     echo -e "   ${GREEN}✓ Virtualenv ready:${NC} $VENV_PYTHON"
     echo -e "   Installing Python packages from requirements.txt..."
@@ -240,7 +240,7 @@ fi
 
 # 11. Record dynamic installation date & cutoff (first install only, before app start)
 echo -e "\n${BLUE}[*] Verifying installation date cutoff configuration...${NC}"
-if [ -f "$SCRIPT_DIR/init_installation_date.py" ]; then
+if [[ -f "$SCRIPT_DIR/init_installation_date.py" ]]; then
     VOLUME_DIR="$VOLUME_DIR" $VENV_PYTHON "$SCRIPT_DIR/init_installation_date.py" || true
 fi
 

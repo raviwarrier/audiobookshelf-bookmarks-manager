@@ -271,3 +271,12 @@ You are free to use, copy, modify, merge, publish, distribute, and sell copies o
 Conditions:
 1. Retain the original copyright notice and permission notice in any distributed copies.
 2. The software is provided as-is, without warranty of any kind. Authors and contributors are not liable for any issues arising from its use.
+
+---
+
+## Software Security
+
+I ran the codebase through [SonarCloud](https://sonarcloud.io/) static application security testing (SAST), which flagged a comprehensive set of security issues, code smells, potential filesystem oracles, and unsanitized input flows.
+
+I am actively in the process of resolving and hardening each of these items. A complete register detailing all identified issues, taint flows, and remediation fixes is documented in [SECURITY_FIXES.md](SECURITY_FIXES.md) (or [security_fixes.md](SECURITY_FIXES.md)).
+

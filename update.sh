@@ -48,7 +48,7 @@ fi
 echo -e "\n${BLUE}[2/4] Setting up Python virtual environment (venv is default)...${NC}"
 VENV_DIR="$SCRIPT_DIR/venv"
 
-if [ ! -f "$VENV_DIR/bin/python3" ]; then
+if [[ ! -f "$VENV_DIR/bin/python3" ]]; then
     echo -e "   Creating Python virtual environment in ${CYAN}$VENV_DIR${NC}..."
     if ! python3 -m venv "$VENV_DIR" 2>/dev/null; then
         echo -e "   ${YELLOW}python3 -m venv failed. Checking for python3-venv package...${NC}"
@@ -62,7 +62,7 @@ if [ ! -f "$VENV_DIR/bin/python3" ]; then
     fi
 fi
 
-if [ -f "$VENV_DIR/bin/python3" ]; then
+if [[ -f "$VENV_DIR/bin/python3" ]]; then
     PYTHON_BIN="$VENV_DIR/bin/python3"
     echo -e "   ${GREEN}✓ Using virtual environment:${NC} $PYTHON_BIN"
 else
@@ -77,7 +77,7 @@ echo -e "   ${GREEN}✓ Python packages installed successfully in venv.${NC}"
 
 # 3. Node Dependencies & Production Build
 echo -e "\n${BLUE}[3/4] Building Web Dashboard & Server Bundle...${NC}"
-if [ -f "$SCRIPT_DIR/.env" ]; then
+if [[ -f "$SCRIPT_DIR/.env" ]]; then
     # Vite warns if NODE_ENV is set in .env; production environment is managed by PM2/runtime
     sed -i '/^NODE_ENV=/d' "$SCRIPT_DIR/.env" 2>/dev/null || true
 fi
@@ -90,7 +90,7 @@ else
 fi
 
 # Ensure existing installation_date.json is protected and never overwritten
-if [ -f "$SCRIPT_DIR/init_installation_date.py" ]; then
+if [[ -f "$SCRIPT_DIR/init_installation_date.py" ]]; then
     $PYTHON_BIN "$SCRIPT_DIR/init_installation_date.py" 2>/dev/null || true
 fi
 

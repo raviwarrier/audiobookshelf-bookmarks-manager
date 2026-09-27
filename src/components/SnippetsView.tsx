@@ -26,6 +26,7 @@ import {
   Clock
 } from 'lucide-react';
 import { Snippet, AbsUser, SyncState, CutoffMode, CutoffConfig } from '../types';
+import { safeSidecarFetch } from '../lib/safeFetch';
 
 interface SnippetsViewProps {
   snippets: Snippet[];
@@ -197,88 +198,21 @@ export const SnippetsView: React.FC<SnippetsViewProps> = ({
       };
 
       let data: any = null;
-      let lastErrMsg = '';
 
-      // 1. First attempt: Direct local API endpoint on the web dashboard
-      // (Bypasses remote WAN NAT loopback and communicates directly with the sidecar)
-      try {
-        const localRes = await fetch('/api/cutoff-config', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(activeToken ? { 'Authorization': `Bearer ${activeToken}` } : {}),
-            ...(serverUrl ? { 'X-ABS-Server-Url': serverUrl } : {}),
-          },
-          body: JSON.stringify(payload)
-        });
-        const rawText = await localRes.text();
-        let parsed: any = null;
-        try {
-          parsed = JSON.parse(rawText);
-        } catch {}
+      const res = await safeSidecarFetch('/api/cutoff-config', {
+        method: 'POST',
+        token: activeToken,
+        serverUrl,
+        sidecarUrl,
+        useProxy,
+        body: payload,
+      });
 
-        if (localRes.ok && parsed && (parsed.status === 'success' || parsed.config)) {
-          data = parsed;
-        } else if (parsed?.detail || parsed?.error) {
-          lastErrMsg = parsed.detail || parsed.error;
-        }
-      } catch (localErr) {
-        console.warn('Local /api/cutoff-config call notice:', localErr);
-      }
-
-      // 2. Fallback attempt: If local route was not reached, route via sidecar proxy or endpoint
-      if (!data) {
-        const endpoint = `${sidecarUrl.replace(/\/+$/, '')}/api/cutoff-config`;
-        if (useProxy) {
-          const res = await fetch('/api/proxy/abs', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              targetUrl: endpoint,
-              method: 'POST',
-              headers: {
-                'Authorization': activeToken ? `Bearer ${activeToken}` : '',
-                'X-ABS-Server-Url': serverUrl,
-                'Content-Type': 'application/json'
-              },
-              body: payload
-            })
-          });
-          const rawText = await res.text();
-          let json: any = null;
-          try {
-            json = JSON.parse(rawText);
-          } catch {}
-
-          if (res.ok && json && (json.ok || json.status === 'success' || json.data)) {
-            data = json.data || json;
-          } else {
-            const err = json?.error || json?.message || json?.data?.detail || lastErrMsg || `Failed with status ${res.status}`;
-            throw new Error(typeof err === 'string' ? err : 'Failed to update cutoff configuration');
-          }
-        } else {
-          const res = await fetch(endpoint, {
-            method: 'POST',
-            headers: {
-              'Authorization': activeToken ? `Bearer ${activeToken}` : '',
-              'X-ABS-Server-Url': serverUrl,
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(payload)
-          });
-          const rawText = await res.text();
-          let json: any = null;
-          try {
-            json = JSON.parse(rawText);
-          } catch {}
-
-          if (res.ok && json) {
-            data = json;
-          } else {
-            const err = json?.detail || json?.error || lastErrMsg || `Failed with status ${res.status}`;
-            throw new Error(typeof err === 'string' ? err : 'Failed to update cutoff configuration');
-          }
-        }
+      if (res.ok && res.data && (res.data.status === 'success' || res.data.config)) {
+        data = res.data;
+      } else {
+        const err = res.data?.detail || res.data?.error || res.data?.message || `Failed with status ${res.status}`;
+        throw new Error(typeof err === 'string' ? err : 'Failed to update cutoff configuration');
       }
 
       setCutoffSaveSuccess('Cutoff period updated successfully!');
@@ -477,52 +411,20 @@ export const SnippetsView: React.FC<SnippetsViewProps> = ({
         serverUrl,
       };
 
-      const targetEndpoint = `${sidecarUrl.replace(/\/+$/, '')}/api/snippet/retry`;
-      let res: Response;
       let json: any = null;
 
       try {
-        if (useProxy) {
-          res = await fetch('/api/proxy/abs', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              targetUrl: targetEndpoint,
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${activeToken || ''}`,
-                'X-ABS-Server-Url': serverUrl,
-              },
-              body: payload,
-            }),
-          });
-          const raw = await res.json();
-          json = raw.data || raw;
-        } else {
-          res = await fetch(targetEndpoint, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${activeToken || ''}`,
-              'X-ABS-Server-Url': serverUrl,
-            },
-            body: JSON.stringify(payload),
-          });
-          json = await res.json();
-        }
-      } catch (directErr: any) {
-        // Fallback to local server /api/snippet/retry
-        const fbRes = await fetch('/api/snippet/retry', {
+        const res = await safeSidecarFetch('/api/snippet/retry', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${activeToken || ''}`,
-            'X-ABS-Server-Url': serverUrl,
-          },
-          body: JSON.stringify(payload),
+          token: activeToken,
+          serverUrl,
+          sidecarUrl,
+          useProxy,
+          body: payload,
         });
-        json = await fbRes.json();
+        json = res.data?.data || res.data;
+      } catch (err: any) {
+        console.warn('Retry error:', err);
       }
 
       if (json && (json.extraction_status === 'unavailable' || json.status === 'unextractable_saved')) {
@@ -575,62 +477,24 @@ export const SnippetsView: React.FC<SnippetsViewProps> = ({
         serverUrl,
       };
 
-      const targetEndpoint = `${sidecarUrl.replace(/\/+$/, '')}/api/snippet/expand`;
-
-      let res: Response;
       let jsonResult: any = null;
 
       try {
-        if (useProxy) {
-          res = await fetch('/api/proxy/abs', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              targetUrl: targetEndpoint,
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${activeToken || ''}`,
-                'X-ABS-Server-Url': serverUrl,
-              },
-              body: payload,
-            }),
-          });
-          const raw = await res.json();
-          jsonResult = raw.data || raw;
-          if (raw.ok === false) {
-            throw new Error(raw.data?.detail || raw.message || 'Failed to expand snippet');
-          }
-        } else {
-          res = await fetch(targetEndpoint, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${activeToken || ''}`,
-              'X-ABS-Server-Url': serverUrl,
-            },
-            body: JSON.stringify(payload),
-          });
-          jsonResult = await res.json();
-          if (!res.ok) {
-            throw new Error(jsonResult?.detail || 'Failed to expand snippet');
-          }
+        const res = await safeSidecarFetch('/api/snippet/expand', {
+          method: 'POST',
+          token: activeToken,
+          serverUrl,
+          sidecarUrl,
+          useProxy,
+          body: payload,
+        });
+
+        jsonResult = res.data?.data || res.data;
+        if (!res.ok) {
+          throw new Error(jsonResult?.detail || jsonResult?.message || 'Failed to expand snippet');
         }
       } catch (primaryErr: any) {
-        // Fallback to local server endpoint
-        const fbRes = await fetch('/api/snippet/expand', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${activeToken || ''}`,
-            'X-ABS-Server-Url': serverUrl,
-          },
-          body: JSON.stringify(payload),
-        });
-        jsonResult = await fbRes.json();
-        if (!fbRes.ok) {
-          throw new Error(jsonResult?.detail || jsonResult?.error || primaryErr.message || 'Failed to expand snippet');
-        }
+        throw new Error(primaryErr?.message || 'Failed to expand snippet');
       }
 
       if (jsonResult && (jsonResult.extraction_status === 'unavailable' || jsonResult.status === 'unextractable_saved')) {

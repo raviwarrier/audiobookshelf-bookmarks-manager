@@ -8,6 +8,43 @@ Can be executed anytime via: python3 setup.py or ./setup.sh
 import os
 import sys
 import shutil
+import re
+
+def sanitize_input_string(s: str) -> str:
+    """Strips null bytes and control characters from user input."""
+    if not s:
+        return ""
+    return "".join(ch for ch in s.strip() if ch >= " " and ch != "\x7f")
+
+def sanitize_directory_path(p: str, default: str) -> str:
+    """Sanitizes and canonicalizes directory paths, blocking null bytes and invalid characters."""
+    if not p or not isinstance(p, str):
+        return default
+    clean = sanitize_input_string(p)
+    if not clean or "\0" in clean:
+        print(f"   [!] Invalid directory path. Falling back to default: {default}")
+        return default
+    try:
+        expanded = os.path.expanduser(os.path.expandvars(clean))
+        normalized = os.path.abspath(expanded)
+        return normalized
+    except Exception:
+        return default
+
+def sanitize_port(p_str: str, default: str) -> str:
+    """Validates that port is a valid numeric TCP port between 1 and 65535."""
+    clean = sanitize_input_string(p_str)
+    if clean.isdigit() and 1 <= int(clean) <= 65535:
+        return clean
+    print(f"   [!] Invalid port '{p_str}'. Using default: {default}")
+    return default
+
+def sanitize_url(url: str, default: str) -> str:
+    """Sanitizes server URL against injection and invalid characters."""
+    clean = sanitize_input_string(url)
+    if not clean or any(ch in clean for ch in ['"', "'", "\n", "\r", "\\"]):
+        return default
+    return clean.rstrip("/")
 
 def get_input(prompt: str, default: str = "") -> str:
     default_hint = f" [{default}]" if default else ""
@@ -16,7 +53,8 @@ def get_input(prompt: str, default: str = "") -> str:
     except (KeyboardInterrupt, EOFError):
         print("\n\nSetup aborted by user.")
         sys.exit(1)
-    return val if val else default
+    clean_val = sanitize_input_string(val)
+    return clean_val if clean_val else default
 
 def main():
     base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -65,21 +103,25 @@ def main():
     print("1. Audiobookshelf Target Server URL")
     print("   The URL of your existing Audiobookshelf server (e.g. http://localhost:13378 or http://audiobookshelf:80)")
     print("   Note: 13378 is Audiobookshelf's default port. The manager connects to it; it does NOT listen on 13378.")
-    abs_target = get_input("   Target ABS URL", existing["ABS_TARGET_SERVER"]).rstrip("/")
+    raw_abs_target = get_input("   Target ABS URL", existing["ABS_TARGET_SERVER"])
+    abs_target = sanitize_url(raw_abs_target, existing["ABS_TARGET_SERVER"])
 
     # 2. Output directory
     print("\n2. Output Directory for Bookmarks & Transcripts (VOLUME_DIR)")
     print("   Where sliced audio (.mp3), markdown transcripts (.md), and JSON metadata will be saved.")
-    vol_dir = get_input("   Directory path", existing["VOLUME_DIR"])
-    try:
-        os.makedirs(vol_dir, exist_ok=True)
-    except Exception as e:
-        print(f"   Warning: Could not create directory {vol_dir}: {e}")
+    raw_vol_dir = get_input("   Directory path", existing["VOLUME_DIR"])
+    vol_dir = sanitize_directory_path(raw_vol_dir, existing["VOLUME_DIR"])
+    if vol_dir and not os.path.islink(vol_dir):
+        try:
+            os.makedirs(vol_dir, exist_ok=True)
+        except Exception as e:
+            print(f"   Warning: Could not create directory {vol_dir}: {e}")
 
     # 3. Audiobooks path
     print("\n3. Audiobooks Media Library Directory (Host Path)")
     print("   Host server path where audiobook files are located (used for read-only Docker mounts)")
-    audiobooks_path = get_input("   Audiobooks path", existing["AUDIOBOOKS_PATH"])
+    raw_audiobooks_path = get_input("   Audiobooks path", existing["AUDIOBOOKS_PATH"])
+    audiobooks_path = sanitize_directory_path(raw_audiobooks_path, existing["AUDIOBOOKS_PATH"])
 
     # 4. Ports
     print("\n4. Network Ports Configuration")
@@ -90,14 +132,16 @@ def main():
     print("   (Ports 3000 and 8080 are not used on production servers to prevent conflicts).\n")
 
     while True:
-        sidecar_port = get_input("   Python Sidecar Port", existing["SIDECAR_PORT"])
+        raw_sidecar_port = get_input("   Python Sidecar Port", existing["SIDECAR_PORT"])
+        sidecar_port = sanitize_port(raw_sidecar_port, existing["SIDECAR_PORT"])
         if sidecar_port == "13378":
             print("   [!] Port 13378 is reserved for Audiobookshelf. Please choose another port (e.g. 13380 or 13377).")
         else:
             break
 
     while True:
-        web_port = get_input("   Web Dashboard Port", existing["PORT"])
+        raw_web_port = get_input("   Web Dashboard Port", existing["PORT"])
+        web_port = sanitize_port(raw_web_port, existing["PORT"])
         if web_port == "13378":
             print("   [!] Port 13378 is reserved for Audiobookshelf. Please choose another port (e.g. 13379 or 13376).")
         elif web_port == sidecar_port:
