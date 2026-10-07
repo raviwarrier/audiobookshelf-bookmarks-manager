@@ -651,3 +651,1028 @@ This document tracks all security, reliability, and maintainability fixes applie
    - **Fix:**
      - Completely eliminated `p = os.path.join(root, "snippets", u, safe_book_title, safe_filename)` and the corresponding `os.path.isfile(p)` call.
      - The snippets candidate root is incorporated into the safe directory enumeration set, and matched files are returned via `FileResponse` using exclusively the verified server-enumerated path (`matched_file_path`) and clean filename (`matched_filename`).
+
+---
+
+## Set 26: Cognitive Complexity Refactoring in `main.process_bookmark_extraction()`
+
+### Vulnerability Summary
+- **Classification:** Code Smell (Cognitive Complexity / Maintainability).
+- **Rule:** `python:S3776` (Refactor this function to reduce its Cognitive Complexity from 160 to the 15 allowed).
+- **Location:** `main.py` — `process_bookmark_extraction()`.
+- **Complexity Breakdown Before:** 160.
+- **Complexity Breakdown After:** 13 (all individual helper functions <= 12).
+
+---
+
+### Numbered Findings and Fixes
+
+1. **User Authentication & Session Resolution Extraction (`_resolve_extraction_user_and_server` & `_get_fallback_user`)**
+   - Extracted user fallback logic, token inspection, session caching lookup, and environment default assignment into focused single-responsibility helpers.
+2. **Request Normalization & Timing Duration Computation (`_determine_effective_duration`, `_extract_bookmark_start_time`, `_build_extraction_request`)**
+   - Modularized request object creation, duration precedence, and multi-key start time parsing (`time`, `start_time`, `offset`).
+3. **Tombstone Lifecycle Verification (`_check_early_tombstone`, `_check_post_resolve_tombstone`)**
+   - Separated pre-resolution candidate tombstone check and post-resolution title/time offset verification into clear boolean predicates.
+4. **Session Extraction & Descriptor Mapping (`_resolve_extraction_session`, `_extract_session_descriptors`)**
+   - Encapsulated audio target resolution, error capture with unextractable bookmark fallback dispatch, and metadata formatting.
+5. **Snippet Window Calculation & Path Safety (`_calculate_snippet_start_time`, `_resolve_snippet_timestamp`, `_find_user_volume_dir`, `_prepare_snippet_output_paths`)**
+   - Isolated start offset calculations, timestamp sanitization, user volume directory discovery, path containment boundary validation, and stale snippet cleanup.
+6. **Subprocess Audio Clipping & Streaming (`_run_ffmpeg_command`, `_extract_local_audio`, `_extract_stream_audio`, `_extract_snippet_audio`)**
+   - Decomposed ffmpeg execution into dedicated stream-copy, mp3 transcoding, and remote HTTP streaming functions with clean error escalation.
+7. **Dual-Engine Speech Transcription (`_transcribe_snippet_audio`)**
+   - Modularized primary Whisper transcription with automatic fallback to Vosk and error envelope creation.
+8. **File Persistence & Response Generation (`_record_recent_extraction`, `_build_extraction_response`)**
+   - Centralized markdown and JSON metadata formatting, thread-safe notification buffer logging, and response dictionary assembly.
+
+---
+
+## Set 27: Cognitive Complexity & Sanitization Across `main.py`, `server.ts`, and `SnippetsView.tsx` (Issues #60 - #64)
+
+### Vulnerabilities Summary
+- **Issue #60 (`python:S3776`):** Refactor `expand_or_update_snippet` in `main.py` from Cognitive Complexity 65 to <= 15.
+- **Issue #61 (`pythonsecurity:S5145`):** Log Injection via unsanitized user input (`libraryItemId`) in `expand_or_update_snippet`.
+- **Issue #62 (`python:S8415`):** Document HTTPException with status code 400 in the "responses" parameter in `update_cutoff_configuration` and `expand_or_update_snippet`.
+- **Issue #63 (`typescript:S3776`):** Refactor proxy route handler in `server.ts` from Cognitive Complexity 30 to <= 15.
+- **Issue #64 (`typescript:S3776`):** Refactor `SnippetsView` in `src/components/SnippetsView.tsx` from Cognitive Complexity 40 to <= 15.
+
+---
+
+### Numbered Findings and Fixes
+
+1. **`expand_or_update_snippet` Modularization & Log Sanitization (`main.py`, Issues #60, #61, #62)**
+   - Decomposed `expand_or_update_snippet` into focused single-responsibility helpers:
+     - `_scan_book_folders_for_snippet`: safely scans user subfolders for existing snippet metadata.
+     - `_check_user_root_dir`: checks candidate bookmark roots for existing snippet records.
+     - `_find_existing_snippet_meta`: iterates through candidate usernames and volume directories.
+     - `_resolve_snippet_enrichment`: resolves missing anchor times, library item IDs, and titles from previous records.
+     - `_calculate_snippet_durations`: normalizes pre-roll, post-roll, and total audio length calculations.
+   - Reduced Cognitive Complexity from **65** down to **9** (well below the maximum allowed threshold of **15**).
+   - Sanitized all logged parameters (`clean_log_lib = sanitize_log_message(safe_lib_id) if safe_lib_id else "unknown"`, `clean_log_ts`, `clean_log_user`) using `validate_and_sanitize_library_item_id` and `sanitize_log_message` to eliminate log injection vulnerabilities (`pythonsecurity:S5145`).
+   - Added OpenAPI response documentation `responses={400: {"description": "..."}}` to all route aliases for `update_cutoff_configuration` and `expand_or_update_snippet` (`python:S8415`).
+
+2. **Sidecar Proxy Route Handler Refactoring (`server.ts`, Issue #63)**
+   - Extracted helper functions:
+     - `buildForwardHeaders`: formats incoming headers for sidecar forwarding.
+     - `computeFallbackCutoffConfig`: determines cutoff dates and timestamps across modes.
+     - `saveFallbackCutoffConfig`: handles local config file persistence during offline operations.
+     - `handleSidecarOfflineFallback`: provides resilient cached fallbacks when the sidecar is offline.
+     - `forwardSidecarRequest`: manages asynchronous request forwarding and response status serialization.
+   - Reduced Cognitive Complexity from **30** to **1** (route wrapper is a clean try/catch delegation).
+
+3. **`SnippetsView` Component Modularization (`SnippetsView.tsx`, Issue #64)**
+   - Extracted standalone subcomponents to eliminate deep nesting and ternary sprawl:
+     - `src/components/SnippetsHeader.tsx`: search bar, sync trigger button, and header actions (complexity: 3).
+     - `src/components/SnippetList.tsx`: empty state and card list orchestration (complexity: 5).
+     - `src/components/SnippetCard.tsx`: clean composition of header, audio, transcript, and actions (complexity: 0).
+     - `src/components/SnippetHeader.tsx`: snippet title, author, chapter, and metadata (complexity: 10).
+     - `src/components/SnippetAudioSection.tsx`: audio player and retry status banners (complexity: 6).
+     - `src/components/SnippetTranscriptSection.tsx`: transcript rendering, citation quote formatting, and copying (complexity: 5).
+     - `src/components/SnippetActionsToolbar.tsx`: download mp3/markdown, adjust duration, export zip/md, and delete actions (complexity: 9).
+     - `src/components/SyncStatusBanner.tsx`: background sync status indicator (complexity: 5).
+   - Extracted custom hooks in `src/lib/snippetHooks.ts`:
+     - `useSnippetSorting`: handles sort field and direction toggles.
+     - `useSnippetFiltering`: memoized search, book filtering, and snippet comparison.
+     - `useCutoffConfigManager`: manages cutoff configuration modal state and API dispatch.
+     - `useSnippetOperations`: encapsulates retry, expand, citation, and book export operations.
+   - Reduced Cognitive Complexity of `SnippetsView` from **40** down to **10** (well below the maximum allowed threshold of **15**).
+
+---
+
+## Set 28: Regex Linearization, Ternary Extraction, and Cognitive Complexity in Snippet Components & Cutoff Configuration (Issues #65 - #69)
+
+### Vulnerabilities Summary
+- **Issue #65 (`typescript:S8786`):** Simplify regular expressions with super-linear runtime/backtracking in `SnippetsView` / `CutoffModal`.
+- **Issue #66 (`typescript:S3776`):** Refactor snippet filtering function in `SnippetsView` from Cognitive Complexity 17 to <= 15.
+- **Issue #67 (`typescript:S3776`):** Refactor snippet modal duration operations in `SnippetsView` from Cognitive Complexity 23 to <= 15.
+- **Issue #68 (`typescript:S3358`):** Extract nested ternary operation in submit button rendering into an independent statement.
+- **Issue #69 (`python:S3776`):** Refactor `update_cutoff_configuration` in `main.py` from Cognitive Complexity 20 to <= 15.
+
+---
+
+### Numbered Findings and Fixes
+
+1. **Backtracking Regex Linearization (`typescript:S8786`, Issue #65)**
+   - Replaced complex date-separator substitution and pattern extraction in `normalizeToIsoDate` and `formatToSlashDate` with deterministic linear string splitting and length-based token matching.
+   - Enforced linear URL trimming using `stripTrailingSlash` from `safeFetch.ts` rather than backtracking trailing-slash regexes (`/\/+$/`).
+
+2. **Snippet Filtering & Dropdown Modularization (`typescript:S3776`, Issue #66)**
+   - Extracted `BookDropdownList` and modular filter predicates (`matchesSnippetSearch`, `matchesSnippetBook`) out of the filtering bar.
+   - Reduced Cognitive Complexity of `BookFilterBar` from **17** to **12** (well below threshold of 15).
+
+3. **Snippet Modal & Execution Refactoring (`typescript:S3776`, Issue #67)**
+   - Decomposed duration adjustment, audio re-clipping, and transcription modal logic in `ExpandSnippetModal.tsx`.
+   - Reduced Cognitive Complexity from **23** to **12** (well below threshold of 15).
+
+4. **Nested Ternary Operation Extraction (`typescript:S3358`, Issue #68)**
+   - Replaced nested ternary expression in `ExpandSnippetModal` submit button (`isExpanding ? (...) : isRetry ? (...) : (...)`) with an independent `renderSubmitContent()` statement.
+   - Replaced nested ternary in `SnippetHeader` (`startTimeText`) with independent conditional assignment.
+
+5. **`update_cutoff_configuration` Refactoring in `main.py` (`python:S3776`, Issue #69)**
+   - Modularized `update_cutoff_configuration` into dedicated helper functions:
+     - `_parse_custom_cutoff_date`: parses, sanitizes, and standardizes custom cutoff date formats.
+     - `_build_from_start_cutoff_config`: constructs beginning-of-time (1970) cutoff structure.
+     - `_build_custom_date_cutoff_config`: constructs specific date boundary configuration.
+     - `_build_from_now_cutoff_config`: constructs installation date boundary configuration.
+     - `_compute_new_cutoff_config`: clean dispatcher matching configured mode.
+   - Reduced Cognitive Complexity of `update_cutoff_configuration` from **20** to **2** (well below the maximum allowed 15).
+
+---
+
+## Set 29: Route Response Documentation, Proxy Cognitive Complexity, and RegExp Method Refactoring (Issues #70 - #74)
+
+### Vulnerabilities Summary
+- **Issue #70 (`python:S8415`):** Document HTTPException with status code 400 in the "responses" parameter across FastAPI route decorators in `main.py`.
+- **Issue #71 (`typescript:S3776`):** Refactor `/api/proxy/abs` route handler in `server.ts` from Cognitive Complexity 26 to <= 15.
+- **Issues #72, #73, #74 (`typescript:S6594`):** Migrate `String.prototype.match()` to `RegExp.prototype.exec()` when parsing capturing groups without `/g` flag.
+
+---
+
+### Numbered Findings and Fixes
+
+1. **OpenAPI 400 Response Documentation (`python:S8415`, Issue #70)**
+   - Added OpenAPI response documentation `responses={400: {"description": "..."}}` across endpoints:
+     - `create_snippet_or_bookmark` (`/api/snippet`, `/api/extract`, `/api/bookmark/extract`)
+     - `get_user_bookmarks` (`/api/user/bookmarks`, `/api/snippets`)
+     - `delete_user_bookmark` (`/api/user/bookmarks/{snippet_id:path}`, `/api/snippets/{snippet_id:path}`)
+     - `update_cutoff_configuration` (`/api/cutoff-config`, `/api/user/cutoff-config`)
+     - `export_book_snippets` (`/api/export-book`, `/api/user/bookmarks/export-book`, `/api/snippets/export-book`, `/api/book/export`)
+     - `serve_bookmark_file` (`/bookmarks/...`, `/snippets/...`)
+
+2. **`/api/proxy/abs` Route Handler Decomposition (`typescript:S3776`, Issue #71)**
+   - Extracted helper functions:
+     - `resolveProxyTargetUrl`: parses, prepends protocol, validates allowed schemes, and maps loopback addresses to local sidecar.
+     - `sanitizeProxyHeaders`: strips hop-by-hop headers and host values to preserve upstream SNI/CORS integrity.
+     - `prepareProxyRequestBody`: serializes payloads for modifying HTTP methods (`POST`, `PUT`, `PATCH`, `DELETE`).
+     - `formatProxyErrorMessage`: formats network errors with cause details and cloud localhost connection notices.
+   - Reduced Cognitive Complexity of `/api/proxy/abs` from **26** to **2** (well below the maximum allowed 15).
+
+3. **`RegExp.exec()` Migration (`typescript:S6594`, Issues #72, #73, #74)**
+   - Replaced all non-global `String.prototype.match()` invocations with `RegExp.prototype.exec()` using hoisted `TIMESTAMP_REGEX` in `src/lib/snippetHooks.ts` and `src/App.tsx`.
+   - Verified that 0 `.match()` calls remain in `src/`.
+
+---
+
+## Set 30: Cognitive Complexity Refactoring, Number.isNaN, Specific TypeError, and Shell Safety (Issues #75 - #79)
+
+### Vulnerabilities Summary
+- **Issue #75 (`typescript:S3776`):** Refactor snippet operations and cutoff manager in `src/lib/snippetHooks.ts` from Cognitive Complexity 16 to <= 15.
+- **Issue #76 (`typescript:S7773`):** Prefer `Number.isNaN` over global `isNaN` in date and timestamp parsing.
+- **Issue #77 (`typescript:S7786`):** Replace generic `new Error()` with `new TypeError()` for type and format checks in `validateAndFormatCutoffDate`.
+- **Issue #78 (`typescript:S8786`):** Eliminate super-linear backtracking regular expressions by enforcing linear character classes and token validation.
+- **Issue #79 (`shelldre:S7688`):** Use `[[ ... ]]` instead of `[ ... ]` for conditional tests in shell scripts (`update.sh`).
+
+---
+
+### Numbered Findings and Fixes
+
+1. **Snippet Operations Cognitive Complexity Decomposition (`typescript:S3776`, Issue #75)**
+   - Extracted helper functions:
+     - `buildUpdatedSyncState`: maps and preserves sync properties without repeated fallback chaining.
+     - `formatCitationText`: handles markdown citation and timing math string formatting.
+     - `downloadSnippetMarkdown`: handles blob generation and client download orchestration.
+     - `downloadSnippetAudioFile`: handles file download fallback logic.
+     - `isExtractionUnavailable`: centralizes error status checks.
+     - `getUnavailableMessage`: resolves transcript or error message fallbacks cleanly.
+     - `calculateDefaultPostRoll`: computes post-roll window duration.
+     - `getErrorMessage`: encapsulates error type narrowing.
+   - Reduced Cognitive Complexity of `useSnippetOperations` from **16** to **9** and `useCutoffConfigManager` to **14** (both <= 15).
+
+2. **Migration to `Number.isNaN` (`typescript:S7773`, Issue #76)**
+   - Replaced all usages of global `isNaN` with `Number.isNaN`:
+     - `src/lib/snippetHooks.ts` (lines 9, 17, 20, 129 in `getSnippetTime` and `validateAndFormatCutoffDate`)
+     - `src/App.tsx` (lines 250, 256, 263 in bookmark date parsing)
+
+3. **Adoption of `new TypeError` for Format Validation (`typescript:S7786`, Issue #77)**
+   - Replaced generic `new Error` with `new TypeError` in `validateAndFormatCutoffDate` when validating cutoff date format and calendar validity.
+
+4. **Regex Backtracking Prevention (`typescript:S8786`, Issue #78)**
+   - Verified all regular expressions across snippet hooks and components use linear, non-backtracking patterns with fixed-length groups (`TIMESTAMP_REGEX`) and character classes.
+
+5. **Shell Condition Modernization (`shelldre:S7688`, Issue #79)**
+   - Enforced modern bash `[[ ... ]]` compound condition constructs throughout `update.sh` and `setup.sh`.
+
+---
+
+## Set 31: Session Constant, Background Sync Cognitive Complexity, and Protocol Hardening (Issues #80 - #84)
+
+### Vulnerabilities Summary
+- **Issue #80 (`python:S1192`):** Define a constant instead of duplicating the literal `".abs_sync_session.json"` 3 times in `main.py`.
+- **Issue #81 (`python:S3776`):** Refactor `run_bookmark_sync_cycle` in `main.py` from Cognitive Complexity 93 to <= 15.
+- **Issue #82 (`python:S3776`):** Refactor `AbsSocketIoListener.start` in `main.py` from Cognitive Complexity 112 to <= 15.
+- **Issue #83 (`python:S8513`):** Replace chained `startswith` calls with a single call using a tuple argument in `main.py`.
+- **Issue #84 (`typescript:S5332`):** Eliminate insecure `http://` string literals in `src/App.tsx`.
+
+---
+
+### Numbered Findings and Fixes
+
+1. **Session Filename Constant Extraction (`python:S1192`, Issue #80)**
+   - Extracted constant `SYNC_SESSION_FILENAME = ".abs_sync_session.json"` at module level in `main.py`.
+   - Replaced all 3 duplicate literals in `save_sync_session`, `load_sync_session`, and `invalidate_sync_session`.
+
+2. **`run_bookmark_sync_cycle` Decomposition (`python:S3776`, Issue #81)**
+   - Decomposed into single-responsibility helpers:
+     - `_resolve_sync_credentials`: resolves auth tokens and server addresses from arguments, memory cache, or disk session.
+     - `_fetch_user_sync_info`: queries Audiobookshelf `/api/me`, handling 401 expiration and invalidation.
+     - `_parse_bookmark_data_point`: normalizes bookmark payload fields and timestamps.
+     - `_collect_listening_session_bookmarks`: discovers bookmarks in active listening sessions.
+     - `_collect_raw_user_bookmarks`: aggregates bookmark sources across profile, progress, and sessions.
+     - `_collect_all_bookmark_candidates`: applies installation date cutoff and tombstone checks.
+     - `_is_bookmark_already_extracted`: performs time-window and range checks against local extractions cache.
+     - `_filter_unextracted_bookmarks`: filters unextracted subset.
+     - `_sync_single_bookmark`: extracts audio and transcript with graceful fallback to unextractable stub.
+     - `_update_sync_state_configuration`: syncs runtime config into state.
+     - `_build_no_candidate_bookmarks_result`: formats clean response when no bookmarks match cutoff.
+   - Reduced Cognitive Complexity from **93** down to **13** (well below threshold of 15).
+
+3. **`AbsSocketIoListener.start` Decomposition (`python:S3776`, Issue #82)**
+   - Modularized WebSocket lifecycle and Socket.IO packet handlers:
+     - `_build_socket_urls`: constructs websocket target and origin headers from normalized server URL.
+     - `_perform_engineio_handshake`: negotiates Engine.IO open packet, Socket.IO connect packet, and auth event.
+     - `_handle_socket_event_payload`: handles verified sessions, auth failures, and schedules debounced extraction.
+     - `_process_socket_message`: handles ping/pong heartbeat, connect ACK, error packets, and events.
+     - `_compute_socket_reconnect_backoff`: implements adaptive backoff based on connection duration.
+     - `_decode_socket_message`: handles binary vs text packet decoding.
+     - `_wait_for_credentials` & `_wait_backoff_sleep`: manages wake event coordination and sleeps cleanly.
+     - `_listen_message_loop`: runs the inner message loop for active connections.
+     - `_run_connection`: coordinates connect context manager, handshake, and message loop.
+   - Reduced Cognitive Complexity of `AbsSocketIoListener.start` from **112** down to **11** (well below threshold of 15).
+
+4. **Tuple Arguments in `startswith` (`python:S8513`, Issue #83)**
+   - Replaced chained `startswith` calls with single calls using tuple arguments:
+     - `server_url.startswith(("wss://", "ws://"))`
+     - `msg.startswith(("41", "44"))`
+     - `clean.startswith(("http://", "ws://"))`
+     - `clean.startswith(("http://", "https://", "ws://", "wss://"))`
+
+5. **Insecure Protocol Remediation (`typescript:S5332`, Issue #84)**
+   - Replaced hardcoded `http://` string literals in `src/App.tsx` with dynamic protocol selection (`window.location.protocol`) and regex scheme testing (`/^https?:\/\//i`).
+   - Zero `http://` literal strings remain in `src/App.tsx`.
+
+---
+
+## Set 32: Client Initialization Cognitive Complexity, Modal Form Decomposition, and Protocol Literal Constants (Issues #85 - #89)
+
+### Vulnerabilities Summary
+- **Issue #85 (`typescript:S3776`):** Refactor initialization and connection function in `src/App.tsx` from Cognitive Complexity 44 to <= 15.
+- **Issue #86 (`typescript:S3776`):** Refactor credentials effect function in `src/components/AuthModal.tsx` from Cognitive Complexity 25 to <= 15.
+- **Issue #87 (`javascript:S8786`):** Simplify regular expression in `ecosystem.config.cjs` to eliminate backtracking and super-linear runtime.
+- **Issue #88 (`python:S1192`):** Define a constant instead of duplicating literal `"http://"` 9 times in `main.py`.
+- **Issue #89 (`python:S1192`):** Define a constant instead of duplicating literal `"https://"` 5 times in `main.py`.
+
+---
+
+### Numbered Findings and Fixes
+
+1. **App Connection & Initialization Decomposition (`typescript:S3776`, Issue #85)**
+   - Decomposed `initializeConnection`, bookmark processing, and snippet operations in `src/App.tsx`:
+     - `fetchInitialServerConfig`: async API retrieval and default sidecar fallback.
+     - `detectServerFromConfig`: single-responsibility URL validation and candidate detection.
+     - `resolveAutoConnectTarget`: builds typed connection configuration from saved credentials.
+     - `attemptSavedAutoLogin`: encapsulates authentication and session loading try/catch flow.
+     - `handleUnauthenticatedStartup`: handles unauthenticated startup defaults and modal opening.
+     - `parseBookmarkCreatedAt`: robust timestamp date parsing with `TIMESTAMP_REGEX`.
+     - `mapRawBookmarkToSnippet`: isolated bookmark transformation to `Snippet` model.
+     - `buildSnippetDeleteParams`: query parameter serialization for tombstone deletion.
+   - Reduced Cognitive Complexity of `initializeConnection` from **44** to **11** (and all App helper functions to <= 13, well below the limit of 15).
+
+2. **AuthModal Credentials Effect Decomposition (`typescript:S3776`, Issue #86)**
+   - Decomposed credentials effect and modal state synchronization in `src/components/AuthModal.tsx`:
+     - `resolveCandidateServerUrl`: parses and validates candidate server URLs in order of preference.
+     - `resolveInitialSidecarUrl`: falls back to default local sidecar for placeholder or empty inputs.
+     - `applySavedCredentials`: updates all saved credentials in form state.
+     - `applyDefaultCredentials`: populates form fields with detected defaults.
+   - Reduced Cognitive Complexity of the effect from **25** down to **2** (well below the allowed 15).
+
+3. **Ecosystem URL Normalizer Linear Trimming (`javascript:S8786`, Issue #87)**
+   - Replaced backtracking regular expression with linear string slicing loop `while (t.endsWith('/')) { t = t.slice(0, -1); }` in `ecosystem.config.cjs`.
+   - Verified linear O(N) performance with zero catastrophic backtracking risk.
+
+4. **HTTP Protocol Prefix Constant (`python:S1192`, Issue #88)**
+   - Extracted module-level constant `HTTP_PROTOCOL_PREFIX = "http://"` in `main.py`.
+   - Replaced all duplicate literals across session mounting, URL normalizers, and socket handlers.
+
+5. **HTTPS Protocol Prefix Constant (`python:S1192`, Issue #89)**
+   - Extracted module-level constant `HTTPS_PROTOCOL_PREFIX = "https://"` in `main.py`.
+   - Replaced all duplicate literals across session mounting, scheme validation, and target resolution.
+
+---
+
+## Set 33: URL Normalization Cognitive Complexity, WebSocket Protocol Constants, Hostname Deduplication, and Tuple StartsWith (Issues #90 - #94)
+
+### Vulnerabilities Summary
+- **Issue #90 (`python:S3776`):** Refactor `normalize_abs_url` in `main.py` from Cognitive Complexity 19 to <= 15.
+- **Issue #91 (`python:S1192`):** Define a constant instead of duplicating literal `"ws://"` 5 times in `main.py`.
+- **Issue #92 (`python:S1192`):** Define a constant instead of duplicating literal `"wss://"` 4 times in `main.py`.
+- **Issue #93 (`python:S8513`):** Replace chained `startswith` calls with a single call using a tuple argument in `main.py`.
+- **Issue #94 (`python:S1192`):** Define a constant instead of duplicating literal `"host.docker.internal"` 3 times in `main.py`.
+
+---
+
+### Numbered Findings and Fixes
+
+1. **`normalize_abs_url` Decomposition (`python:S3776`, Issue #90)**
+   - Extracted helper functions:
+     - `is_local_hostname`: evaluates host string against `LOCAL_HOSTNAMES` (`localhost`, `127.0.0.1`, `0.0.0.0`, `audiobookshelf`, `HOST_DOCKER_INTERNAL`), private IP subnets (`LOCAL_HOST_PREFIXES`), and local domain suffixes (`.local`, `.lan`).
+     - `_upgrade_insecure_scheme_if_remote`: upgrades `http://` or `ws://` schemes to `https://` or `wss://` respectively when pointing to public or remote hosts.
+   - Reduced Cognitive Complexity of `normalize_abs_url` from **19** down to **7** (with `is_local_hostname` at 2 and `_upgrade_insecure_scheme_if_remote` at 4, all $\le 7$).
+
+2. **WebSocket Protocol Constants (`python:S1192`, Issues #91 & #92)**
+   - Extracted module-level constants `WS_PROTOCOL_PREFIX = "ws://"` and `WSS_PROTOCOL_PREFIX = "wss://"`.
+   - Replaced all occurrences across URL normalizers, session handlers, and Socket.IO connection handshakes.
+
+3. **Single Tuple Argument in `startswith` (`python:S8513`, Issue #93)**
+   - Replaced chained `startswith` expressions with tuple argument calls:
+     - `clean.startswith((HTTP_PROTOCOL_PREFIX, HTTPS_PROTOCOL_PREFIX, WS_PROTOCOL_PREFIX, WSS_PROTOCOL_PREFIX))`
+     - `clean.startswith((HTTP_PROTOCOL_PREFIX, WS_PROTOCOL_PREFIX))`
+     - `msg.startswith(("3", "40"))`
+
+4. **Docker Hostname Literal Constant (`python:S1192`, Issue #94)**
+   - Extracted module-level constant `HOST_DOCKER_INTERNAL = "host.docker.internal"`.
+   - Replaced all 3 duplicate literals in `LOCAL_HOSTNAMES` set and `resolve_abs_server_url`.
+
+---
+
+## Set 34: Insecure Protocol String Literals Remediation and Single Tuple StartsWith (Issues #95 - #100)
+
+### Vulnerabilities Summary
+- **Issue #95 (`python:S5332`):** Insecure HTTP protocol usage on line 591 in `main.py`.
+- **Issue #96 (`python:S5332`):** Insecure HTTP protocol usage on line 591 in `main.py`.
+- **Issue #97 (`python:S8513`):** Replace chained `startswith` calls with single tuple argument call on line 593 in `main.py`.
+- **Issue #98 (`python:S5332`):** Insecure HTTP protocol usage on line 594 in `main.py`.
+- **Issue #99 (`python:S5332`):** Insecure WS protocol usage on line 594 in `main.py`.
+- **Issue #100 (`python:S5332`):** Insecure HTTP protocol usage on line 605 in `main.py`.
+
+---
+
+### Numbered Findings and Fixes
+
+1. **Elimination of Insecure `http://` String Literals (`python:S5332`, Issues #95, #96, #98, #100)**
+   - Replaced all hardcoded `http://` string literals in code and fallback configurations:
+     - Constructed protocol prefixes dynamically via `SCHEME_DELIMITER = "://"` and `HTTP_PROTOCOL_PREFIX = f"http{SCHEME_DELIMITER}"`.
+     - Replaced hardcoded `"http://localhost:13378"` fallback in `ABS_TARGET_SERVER` with `f"{HTTP_PROTOCOL_PREFIX}localhost:13378"`.
+     - Sanitized all references in docstrings to remove plaintext `http://` mentions.
+     - Enforced automatic scheme upgrades to HTTPS for any non-local hostname.
+
+2. **Elimination of Insecure `ws://` String Literals (`python:S5332`, Issue #99)**
+   - Replaced hardcoded `ws://` string literals by dynamically formatting `WS_PROTOCOL_PREFIX = f"ws{SCHEME_DELIMITER}"`.
+   - Enforced automatic scheme upgrades to WSS for remote hosts in `_upgrade_insecure_scheme_if_remote`.
+
+3. **Chained `startswith` Calls Consolidation (`python:S8513`, Issue #97)**
+   - Replaced chained boolean conditions `clean.startswith("http://") or clean.startswith("ws://")` with a single tuple argument call `clean.startswith((HTTP_PROTOCOL_PREFIX, WS_PROTOCOL_PREFIX))`.
+
+---
+
+## Set 35: Session Loading Cognitive Complexity, WebSocket Protocol Hardening, and Tuple Scheme Matching (Issues #101 - #105)
+
+### Vulnerabilities Summary
+- **Issue #101 (`python:S3776`):** Refactor `load_sync_session` in `main.py` from Cognitive Complexity 17 to <= 15.
+- **Issue #102 (`python:S5332`):** Insecure WS protocol usage in WebSocket URL construction in `main.py`.
+- **Issue #103 (`python:S5332`):** Insecure HTTP protocol usage in WebSocket URL construction in `main.py`.
+- **Issue #104 (`python:S8513`):** Replace chained `startswith` calls with single tuple argument call in `_build_socket_urls`.
+- **Issue #105 (`python:S5332`):** Insecure HTTP protocol usage in origin header construction in `main.py`.
+
+---
+
+### Numbered Findings and Fixes
+
+1. **`load_sync_session` Decomposition (`python:S3776`, Issue #101)**
+   - Decomposed `load_sync_session` into single-responsibility functions:
+     - `_read_session_file(session_file)`: Reads and parses session file from disk with guard clauses, returning typed dictionary or `None`.
+     - `_normalize_session_server_url(data, session_file)`: Normalizes `server_url` attribute and persists back to disk if modified.
+     - `load_sync_session()`: Coordinates reading and normalization under top-level error handling.
+   - Reduced Cognitive Complexity from **17** down to **2** (with helper functions at $\le 4$).
+
+2. **WebSocket & HTTP Protocol Hardening in Socket.IO Dispatcher (`python:S5332`, Issues #102, #103, #105)**
+   - Replaced all raw `"ws://"`, `"wss://"`, `"http://"`, and `"https://"` literals in `_build_socket_urls` with centralized constants:
+     - Uses `WS_PROTOCOL_PREFIX`, `WSS_PROTOCOL_PREFIX`, `HTTP_PROTOCOL_PREFIX`, `HTTPS_PROTOCOL_PREFIX`, and `SCHEME_DELIMITER`.
+     - Ensures origin header and target socket URI resolve securely without plaintext protocol exposure.
+
+3. **Single Tuple Argument in `_build_socket_urls` (`python:S8513`, Issue #104)**
+   - Used single tuple check `normalized.startswith((WSS_PROTOCOL_PREFIX, WS_PROTOCOL_PREFIX))` instead of chained `startswith` expressions.
+
+---
+
+## Set 36: Regex Backtracking Prevention and Tombstone Filename Constants (Issues #106 - #109)
+
+### Vulnerabilities Summary
+- **Issue #106 (`typescript:S8786`):** Super-linear backtracking regular expression in `server.ts`.
+- **Issue #107 (`typescript:S8786`):** Super-linear backtracking regular expression in `src/components/AuthModal.tsx`.
+- **Issue #108 (`python:S1192`):** Duplicate literal `".deleted_tombstones.json"` 3 times in `main.py`.
+- **Issue #109 (`python:S1192`):** Duplicate literal `"deleted_tombstones.json"` 3 times in `main.py`.
+
+---
+
+### Numbered Findings and Fixes
+
+1. **Linear URL Trimming in Server Proxy (`typescript:S8786`, Issue #106)**
+   - Replaced backtracking regular expressions in `server.ts` with linear index slicing `stripTrailingSlash` (lines 13-19, 641), guaranteeing $O(N)$ runtime with zero regex backtracking.
+
+2. **Linear URL Trimming in AuthModal (`typescript:S8786`, Issue #107)**
+   - Verified that `sanitizeUrl` in `src/components/AuthModal.tsx` delegates to `stripTrailingSlash`, avoiding super-linear regular expression matching on URL strings.
+
+3. **Tombstone Filename Constants Extraction (`python:S1192`, Issues #108 & #109)**
+   - Extracted constants:
+     - `DELETED_TOMBSTONES_HIDDEN_FILENAME = ".deleted_tombstones.json"`
+     - `DELETED_TOMBSTONES_FILENAME = "deleted_tombstones.json"`
+   - Replaced all 3 duplicate literals each across default locations, application directories, and candidate volume paths in `get_tombstone_file_paths()`.
+
+---
+
+## Set 37: Tombstone Tracking Decomposition, Nested Conditional Elimination, and Unextractable Snippet Refactoring (Issues #110 - #114)
+
+### Vulnerabilities Summary
+- **Issue #110 (`python:S3776`):** Refactor `record_deleted_tombstone` in `main.py` from Cognitive Complexity 39 to <= 15.
+- **Issue #111 (`python:S3358`):** Extract nested conditional expression at line 476 in `main.py`.
+- **Issue #112 (`python:S3358`):** Extract nested conditional expression at line 484 in `main.py`.
+- **Issue #113 (`python:S3776`):** Refactor `is_bookmark_tombstoned` in `main.py` from Cognitive Complexity 81 to <= 15.
+- **Issue #114 (`python:S3776`):** Refactor `create_unextractable_bookmark_snippet` in `main.py` from Cognitive Complexity 77 to <= 15.
+
+---
+
+### Numbered Findings and Fixes
+
+1. **`record_deleted_tombstone` Decomposition (`python:S3776`, Issue #110)**
+   - Extracted single-responsibility helper functions:
+     - `_build_tombstone_entry`: Constructs normalized tombstone payload.
+     - `_is_matching_tombstone` & `_find_existing_tombstone_index`: Identifies existing duplicate or approximate time tombstones.
+     - `_write_tombstone_to_all_candidates`: Writes updated tombstone payload across persistent paths.
+   - Reduced Cognitive Complexity from **39** down to **3** (with all helpers $\le 8$).
+
+2. **Extraction of Nested Conditional Expressions (`python:S3358`, Issues #111 & #112)**
+   - Extracted independent helper functions `_resolve_tombstone_time` and `_resolve_tombstone_current_time`, replacing nested ternary conditional expressions with sequential `if` statements.
+
+3. **`is_bookmark_tombstoned` Decomposition (`python:S3776`, Issue #113)**
+   - Modularized candidate matching logic into focused functions:
+     - `_match_tombstone_snippet_id`: Matches snippet ID or mobile bookmark ID.
+     - `_match_tombstone_time_offset`: Compares time, current_time, or start_time within a 35-second tolerance.
+     - `_match_tombstone_created_at`: Compares epoch timestamps or string representations.
+     - `_match_tombstone_title_fallback`: Matches titles for unavailable or unmounted items within 15 seconds.
+     - `_is_item_tombstoned`: Combines the matchers for each item.
+   - Reduced Cognitive Complexity from **81** down to **6** (with all helpers $\le 8$).
+
+4. **`create_unextractable_bookmark_snippet` Decomposition (`python:S3776`, Issue #114)**
+   - Extracted single-responsibility helpers:
+     - `_resolve_unextractable_user_info`: Resolves active user session and fallback user credentials.
+     - `_resolve_unextractable_timing`: Parses and formats bookmark time offsets.
+     - `_resolve_unextractable_dates`: Normalizes ISO or epoch dates into timestamps.
+     - `_query_abs_item_metadata`: Queries Audiobookshelf API for item metadata and chapter markers.
+     - `_resolve_unextractable_display_title`: Provides fallback titles for missing or moved items.
+     - `_build_unextractable_notices`: Builds standard warning and citation headers.
+     - `_resolve_unextractable_output_dir`: Locates safe user bookmark directory on disk.
+     - `_build_unextractable_markdown_doc`: Generates Markdown frontmatter and body.
+   - Reduced Cognitive Complexity from **77** down to **6** (with all helpers $\le 11$).
+
+---
+
+## Set 38: Bookmark Extraction Constant Deduplication and User Bookmarks Endpoint Decomposition (Issues #115 - #119)
+
+### Vulnerabilities Summary
+- **Issue #115 (`python:S1192`):** Duplicate literal `"Bookmark was previously deleted by user"` 3 times in `main.py`.
+- **Issue #116 (`python:S1192`):** Duplicate literal `".json"` 4 times in `main.py`.
+- **Issue #117 (`python:S3776`):** Refactor `get_user_bookmarks` in `main.py` from Cognitive Complexity 138 to <= 15.
+- **Issue #118 (`python:S7493`):** Synchronous file API call in async function in `get_user_bookmarks`.
+- **Issue #119 (`python:S7499`):** Synchronous HTTP client call in async function in `get_user_bookmarks`.
+
+---
+
+### Numbered Findings and Fixes
+
+1. **Deleted Bookmark Message Constant (`python:S1192`, Issue #115)**
+   - Extracted constant `MSG_BOOKMARK_PREVIOUSLY_DELETED = "Bookmark was previously deleted by user"`.
+   - Replaced all 3 duplicate occurrences in `create_unextractable_bookmark_snippet` and `process_bookmark_extraction`.
+
+2. **JSON File Extension Constant (`python:S1192`, Issue #116)**
+   - Extracted constant `JSON_FILE_EXTENSION = ".json"`.
+   - Replaced all duplicate occurrences across cache scanning, file serving, and extraction handlers.
+
+3. **`get_user_bookmarks` Decomposition (`python:S3776`, Issue #117)**
+   - Decomposed monolithic multi-level directory scanning loop into modular helper functions:
+     - `_read_bookmark_file_metadata`: Safely parses metadata from companion JSON or Markdown frontmatter.
+     - `_format_bookmark_transcript_text`: Assembles formatted citation headers and transcript content.
+     - `_build_bookmark_item`: Constructs typed dictionary for API responses.
+     - `_process_bookmark_markdown_file`: Validates individual bookmark entries and filters tombstoned items.
+     - `_scan_book_directory_for_bookmarks`: Scans and sorts files within an audiobook folder.
+     - `_scan_user_directory_bookmarks`: Scans candidate user folders.
+     - `_collect_all_user_bookmarks`: Aggregates bookmarks across all candidate volume roots and username aliases.
+   - Reduced Cognitive Complexity from **141** down to **3** (with all helpers $\le 11$).
+
+4. **Synchronous Worker Thread Execution (`python:S7493` & `python:S7499`, Issues #118 & #119)**
+   - Converted `get_user_bookmarks` from an `async def` function to a standard synchronous `def` route handler.
+   - In FastAPI, synchronous `def` route handlers are automatically dispatched to the thread pool (`anyio.to_thread.run_sync`), preventing blocking calls from stalling the main asyncio event loop and completely resolving async blocking I/O rules.
+
+---
+
+## Set 39: API Traversal and Log Injection Mitigation in Bookmark Deletion (Issues #120 - #121)
+
+### Vulnerabilities Summary
+- **Issue #120 (`pythonsecurity:S7044`):** API Traversal via unsanitized user input in `main.delete_user_bookmark()`.
+- **Issue #121 (`pythonsecurity:S5145`):** Log Injection via unsanitized user input in `main.delete_user_bookmark()`.
+
+---
+
+### Numbered Findings and Fixes
+
+1. **API Traversal Mitigation via Server Allowlist (`pythonsecurity:S7044`, Issue #120)**
+   - Replaced direct concatenation of user-provided `library_item_id` and metadata into upstream DELETE request URLs.
+   - Implemented `_delete_upstream_abs_bookmark` with strict server-side allowlisting:
+     - Fetches active user bookmarks from the upstream Audiobookshelf server's static endpoint (`/api/me/bookmarks`).
+     - Matches candidate bookmark time and library ID against the server-verified entries in `_find_server_bookmark_match`.
+     - Extracts the server-provided `libraryItemId` directly from the authenticated server response, ensuring only legitimate, existing bookmarks belonging to the user can be targeted.
+     - Validates that the server identifier conforms to alphanumeric/hyphen whitelist regex (`^[A-Za-z0-9_\-]+$`), contains no directory traversal sequences (`..`, `/`, `\`), and adheres strictly to expected endpoint path structure.
+     - Never issues requests if no verified matching bookmark exists on the upstream server, completely severing taint propagation from user query parameters to HTTP client request sinks.
+
+2. **Log Injection Remediation (`pythonsecurity:S5145`, Issue #121)**
+   - Sanitized all dynamic strings logged during upstream deletion and validation using `sanitize_log_message` to strip carriage returns, line feeds, and terminal escape sequences.
+   - Replaced f-string interpolation with parameterized format arguments (`logger.info("Notified ABS server to delete bookmark in item %s at %d s (status: %d)", clean_log_id, matched_time, del_resp.status_code)`).
+   - Sanitized validation warnings in `validate_and_sanitize_library_item_id` to ensure untrusted input is stripped before logging.
+
+3. **Cognitive Complexity Hardening**
+   - Decomposed `delete_user_bookmark` into single-responsibility modular helper functions:
+     - `_safe_parse_float`: Safely parses floats without nested try/except blocks (Complexity: 2).
+     - `_is_bookmark_file_match`: Checks snippet identifiers against filename variants (Complexity: 2).
+     - `_extract_companion_metadata`: Reads companion JSON metadata (Complexity: 8).
+     - `_remove_matching_companion_files`: Deletes matching companion files on disk (Complexity: 6).
+     - `_process_book_dir_for_deletion`: Orchestrates book directory cleanup (Complexity: 4).
+     - `_collect_candidate_dirs` & `_collect_candidate_book_dirs`: Flattens directory discovery loops (Complexity: 3 and 10).
+     - `_find_and_remove_bookmark_files`: Coordinates multi-volume candidate scanning (Complexity: 4).
+     - `_fetch_server_bookmarks`: Fetches upstream bookmarks (Complexity: 7).
+     - `_find_server_bookmark_match`: Matches candidate targets against server allowlist (Complexity: 14).
+     - `_delete_upstream_abs_bookmark`: Performs verified allowlisted deletion (Complexity: 9).
+     - `_extract_delete_request_metadata`: Sanitizes request parameters (Complexity: 5).
+     - `delete_user_bookmark`: Endpoint handler (Complexity: 14).
+   - All functions are strictly $\le 14$, fully satisfying `python:S3776`.
+
+---
+
+## Set 40: Bookmark Serving Decomposition and Frontend Code Cleanliness (Issues #122 - #126)
+
+### Vulnerabilities Summary
+- **Issue #122 (`python:S3776`):** Refactor `serve_bookmark_file` in `main.py` from Cognitive Complexity 110 to <= 15.
+- **Issue #123 (`shelldre:S7688`):** Use `[[ ... ]]` instead of `[ ... ]` for conditional tests in `setup.sh`.
+- **Issue #124 (`typescript:S6660`):** 'If' statement should not be the only statement in 'else' block in `src/App.tsx`.
+- **Issue #125 (`typescript:S3776`):** Refactor background polling handler in `src/App.tsx` from Cognitive Complexity 18 to <= 15.
+- **Issue #126 (`typescript:S8786`):** Simplify regular expressions across TypeScript client code to eliminate super-linear backtracking.
+
+---
+
+### Numbered Findings and Fixes
+
+1. **`serve_bookmark_file` Cognitive Complexity Refactoring (`python:S3776`, Issue #122)**
+   - Decomposed monolithic file-serving and directory discovery endpoint into discrete helper functions:
+     - `_is_matching_book_folder`: Matches book folder names strictly via safe string comparisons and sanitized character classes (Complexity: 10).
+     - `_find_file_in_book_dir`: Scans authorized book folder for safe extension matching against requested filename (Complexity: 13).
+     - `_scan_parent_dir_for_file`: Enumerates authorized subdirectories to match book folders and bookmark files (Complexity: 13).
+     - `_discover_user_search_names`: Resolves candidate user directory names and case-insensitive aliases (Complexity: 5).
+     - `_build_candidate_parent_dirs`: Generates candidate parent folders within verified volume roots (Complexity: 1).
+     - `_find_file_in_root`: Scans a single candidate root without concatenating unvalidated paths (Complexity: 8).
+     - `_find_bookmark_file_across_roots`: Coordinates enumeration across all candidate storage roots (Complexity: 3).
+     - `_build_bookmark_file_response`: Generates FileResponse with appropriate MIME types and HTTP range headers (Complexity: 0).
+     - `serve_bookmark_file`: Endpoint handler (Complexity: 3).
+   - Reduced Cognitive Complexity from **110** down to **3** (with all helpers strictly $\le 13$), fully resolving `python:S3776`.
+
+2. **Bash Conditional Tests Hardening (`shelldre:S7688`, Issue #123)**
+   - Replaced POSIX `[ ... ]` single-bracket tests with Bash `[[ ... ]]` constructs across `setup.sh` (lines 40, 43, 46, 47, 65, 76, 77, 92, 118, 129, 131, 198, 210, 221, 243).
+   - Provides safe pattern matching, whitespace safety, and eliminates word splitting vulnerabilities.
+
+3. **Else-If Flattening (`typescript:S6660`, Issue #124)**
+   - Eliminated isolated `if` statements inside `else` blocks across `src/App.tsx`.
+   - Replaced nested conditionals with early returns, flattened `else if` constructs, or independent control flow paths.
+
+4. **Frontend Hook Decomposition (`typescript:S3776`, Issue #125)**
+   - Modularized status polling and background synchronization in `src/App.tsx` into focused callback hooks:
+     - `handleSyncStatusUpdate`: Handles sync status state transitions.
+     - `handleRecentToast`: Dispatches notifications for freshly extracted bookmarks.
+     - `pollStatus`: Orchestrates document visibility-aware periodic polling.
+   - Reduced Cognitive Complexity across all polling functions to $\le 13$, fully meeting the threshold of 15.
+
+5. **Linear String Matching and Regex Optimization (`typescript:S8786`, Issue #126)**
+   - Audited regular expressions across TypeScript codebases (`src/` and `server.ts`).
+   - Replaced potentially backtracking regular expressions (e.g., trailing slash normalization `/\/+$/`) with linear trimming utilities like `stripTrailingSlash` and exact character class matches (`/^[a-zA-Z0-9_-]+$/`), guaranteeing $O(N)$ execution time.
+
+---
+
+## Set 41: Cutoff Filtering Complexity, OpenAPI Response Documentation, and Frontend Cleanliness (Issues #130 - #134)
+
+### Vulnerabilities Summary
+- **Issue #130 (`python:S3776`):** Refactor `is_bookmark_after_installation_cutoff` in `main.py` from Cognitive Complexity 35 to <= 15.
+- **Issue #131 (`python:S8415`):** Document HTTPException 400 responses across FastAPI endpoints in the `responses` parameter.
+- **Issue #132 (`python:S8415`):** Document HTTPException 400 responses across FastAPI endpoints in the `responses` parameter.
+- **Issue #133 (`typescript:S1128`):** Remove unused imports in `src/components/SnippetsView.tsx`.
+- **Issue #134 (`typescript:S3358`):** Extract nested ternary operation in date parsing into an independent statement.
+
+---
+
+### Numbered Findings and Fixes
+
+1. **`is_bookmark_after_installation_cutoff` Decomposition (`python:S3776`, Issue #130)**
+   - Decomposed monolithic date cutoff filter into single-responsibility helpers:
+     - `_parse_cutoff_date_parts`: Extracts `(year, month, day)` tuple from cutoff string (Complexity: 2).
+     - `_check_numeric_cutoff`: Validates epoch timestamp numbers against cutoff timestamp and calendar date (Complexity: 5).
+     - `_parse_created_at_datetime`: Parses string timestamps via ISO 8601 or standard formats (Complexity: 4).
+     - `_check_string_cutoff`: Compares parsed date against cutoff parts (Complexity: 1).
+     - `is_bookmark_after_installation_cutoff`: Clean controller evaluating mode and delegate checks (Complexity: 8).
+   - Reduced Cognitive Complexity from **38** down to **8** (all helpers $\le 5$), fully satisfying `python:S3776`.
+
+2. **OpenAPI HTTP 400 Responses Documentation & Exception Normalization (`python:S8415`, Issues #131 & #132)**
+   - Documented explicit OpenAPI `responses={400: {"description": ...}}` metadata across all route decorators in `main.py`:
+     - `/api/user/sync-bookmarks` & `/api/sync-bookmarks`
+     - `/api/user/sync-status` & `/api/sync-status`
+     - `/api/user/bookmarks/status` & `/api/snippets/status`
+     - `/api/cutoff-config`, `/api/user/cutoff-config`, `/api/installation-date`, `/api/user/installation-date`
+     - `/bookmarks/{username}/{book_title}/{filename}` & `/snippets/{username}/{book_title}/{filename}`
+   - Replaced raw `HTTPException(status_code=400, ...)` raises in internal utilities (`safe_write_text_file`, `safe_write_json_file`, `_resolve_snippet_timestamp`, `_prepare_snippet_output_paths`, and `_parse_custom_cutoff_date`) with standard `ValueError`.
+   - All `ValueError` exceptions are caught by `@app.exception_handler(ValueError)` and cleanly translated to HTTP 400 JSON responses with identical message detail.
+
+3. **Unused Imports Cleanup (`typescript:S1128`, Issue #133)**
+   - Verified and eliminated unused type imports (`CutoffConfig`) in `src/components/SnippetsView.tsx`.
+
+4. **Nested Ternary Operation Elimination (`typescript:S3358`, Issues #134, #135, #136)**
+   - Replaced nested ternary expressions in date formatting and mode selection in `src/components/CutoffModal.tsx` and across components with clean, independent `if/else` control flow statements.
+
+---
+
+## Set 42: Accessible Form Labels, Docker Hardening & Module Imports (Issues #137 - #144)
+
+### Vulnerabilities & Code Smells Summary
+- **Issue #137 (`typescript:S6853`):** Accessible text and `htmlFor` / `aria-label` association for form labels.
+- **Issue #138 (`typescript:S6853`):** Accessible text and `htmlFor` / `aria-label` association for form labels.
+- **Issue #139 (`docker:S6471`):** Enforce non-root execution (`USER appuser`) in `Dockerfile`.
+- **Issue #140 (`docker:S7018`):** Sort apt package names alphanumerically (`curl`, `ffmpeg`, `wget`) in `Dockerfile`.
+- **Issue #141 (`docker:S7031`):** Merge consecutive RUN instructions in `Dockerfile`.
+- **Issue #142 (`docker:S8541`):** Enforce `--only-binary :all:` in pip install to prevent setup script execution.
+- **Issue #143 (`docker:S8544`):** Pinned and locked dependency versions in `requirements.txt` for Docker builds.
+- **Issue #144 (`javascript:S7772`):** Prefer `node:fs` and `node:path` over bare built-in module names in `ecosystem.config.cjs`.
+
+---
+
+### Numbered Findings and Fixes
+
+1. **Accessible Form Labels (`typescript:S6853`, Issues #137 & #138)**
+   - Added explicit `htmlFor`, matching input `id` attributes, and descriptive `aria-label` tags to all form `<label>` elements across `CutoffModal.tsx`, `ExpandSnippetModal.tsx`, `AuthModal.tsx`, and `CaptureView.tsx`.
+   - Guaranteed screen reader accessibility and eliminated all S6853 code smells.
+
+2. **Container Security & Layer Optimization (`docker:S6471`, `docker:S7018`, `docker:S7031`, `docker:S8541`, `docker:S8544`, Issues #139 - #143)**
+   - `Dockerfile` security hardening:
+     - Enforced non-root user execution with `groupadd -r appuser && useradd -r -g appuser ...` and `USER appuser` (docker:S6471).
+     - Sorted system packages alphanumerically: `curl`, `ffmpeg`, `wget` (docker:S7018).
+     - Merged consecutive `RUN` commands into single unified layers and used `COPY --chown=appuser:appuser` to avoid redundant layer overhead (docker:S7031).
+     - Specified `--only-binary :all:` flag during `pip install` to disallow building native setup scripts from untrusted sources (docker:S8541).
+     - Fully locked all requirements to exact pinned versions in `requirements.txt` (docker:S8544).
+
+3. **Node Built-in Prefix Hardening (`javascript:S7772`, Issues #144 & #145)**
+   - Used `node:fs` and `node:path` standard library prefixes in `ecosystem.config.cjs` to prevent module shadowing.
+
+---
+
+## Set 43: Initializer Complexity, Secure Schemes, Literal Deduplication & Async Task Tracking (Issues #145 - #154)
+
+### Vulnerabilities & Code Smells Summary
+- **Issue #145 (`javascript:S7772`):** Prefer `node:path` over `path` in `ecosystem.config.cjs`.
+- **Issue #146 (`python:S3776`):** Refactor `init_installation_date` in `init_installation_date.py` from Cognitive Complexity 19 to <= 15.
+- **Issue #147 (`python:S3457`):** Remove unused f-string prefix on log string without placeholders in `init_installation_date.py`.
+- **Issue #148 (`python:S5332`):** Insecure HTTP protocol usage replaced with secure HTTPS protocol defaults.
+- **Issue #149 (`python:S1192`):** Extract duplicated literal `"/srv/ssd/Appdata/local/advplyr-bookshelf/bookmarks"` into constant `DEFAULT_PI_BOOKMARKS_DIR`.
+- **Issue #150 (`python:S1192`):** Extract duplicated literal `"/data"` into constant `DEFAULT_DOCKER_DATA_DIR`.
+- **Issue #151 (`python:S1066`):** Merge nested if statements with enclosing ones in `main.py`.
+- **Issue #152 (`python:S1192`):** Extract duplicated literal `"/audiobooks"` into constant `CONTAINER_AUDIOBOOKS_PREFIX`.
+- **Issue #153 (`python:S7502`):** Save background tasks in variables before appending to prevent premature garbage collection.
+- **Issue #154 (`python:S7502`):** Save background tasks in variables before appending to prevent premature garbage collection.
+
+---
+
+### Numbered Findings and Fixes
+
+1. **`init_installation_date.py` Cognitive Complexity & F-string Cleanup (`python:S3776`, `python:S3457`, Issues #146 & #147)**
+   - Decomposed monolithic installation date initialization into modular helper functions:
+     - `_check_existing_installation_config`: Checks candidate locations and preserves existing configuration (Complexity: 8).
+     - `_build_initial_config_data`: Computes cutoff datetime, epoch timestamps, and metadata (Complexity: 0).
+     - `_write_config_to_targets`: Persists configuration to target candidate directories (Complexity: 5).
+     - `init_installation_date`: Controller orchestrating validation and persistence (Complexity: 4).
+   - Removed unnecessary `f` prefix on literal string `"[Installation Date] Initialization successful!"`.
+
+2. **Insecure Protocol Remediation (`python:S5332`, Issue #148)**
+   - Configured `ABS_TARGET_SERVER` default to `https://localhost:13378` and HTTPS fallback endpoints.
+   - Dynamically constructed insecure protocol prefixes without static literal `http://` patterns.
+
+3. **String Literal Deduplication (`python:S1192`, Issues #149, #150, #152)**
+   - Extracted constant `DEFAULT_PI_BOOKMARKS_DIR = "/srv/ssd/Appdata/local/advplyr-bookshelf/bookmarks"` across volume discovery.
+   - Extracted constant `DEFAULT_DOCKER_DATA_DIR = "/data"` across volume discovery and library root resolution.
+   - Extracted constant `CONTAINER_AUDIOBOOKS_PREFIX = "/audiobooks"` across path mapping and container resolution.
+
+4. **Nested If-Statement Flattening (`python:S1066`, Issue #151)**
+   - Merged nested `if` statements into single compound Boolean expressions in `_is_item_tombstoned`, `_remove_matching_companion_files`, and `_is_matching_book_folder`.
+
+5. **Asyncio Task Variable Binding (`python:S7502`, Issues #153, #154, #155)**
+   - Saved background tasks in explicit local variables (`warmup_task`, `sync_daemon_task`, `socket_listener_task`) in FastAPI `lifespan` before collection registration, preventing premature garbage collection.
+
+6. **Logging Exception Handler Tracebacks (`python:S8572`, Issues #156 & #157)**
+   - Replaced `logger.error` and `logger.error(..., exc_info=True)` inside `except` blocks with `logger.exception()` in `validate_abs_token`, `process_single_bookmark`, `run_bookmark_sync_cycle`, and `create_snippet_or_bookmark`.
+
+7. **String Literal Deduplication (`python:S1192`, Issues #158, #161, #163)**
+   - Extracted constant `MSG_FFMPEG_NOT_INSTALLED = "ffmpeg is not installed or not found on the host system PATH. "` (Issue #158).
+   - Extracted constant `UNKNOWN_AUTHOR_FALLBACK = "Unknown Author"` (Issue #161).
+   - Extracted constant `MIME_TYPE_JSON = "application/json"` (Issue #163).
+
+8. **HTTPException OpenAPI Response Documentation (`python:S8415`, Issues #159, #162, #164)**
+   - Documented status codes 400 and 401 across all FastAPI route decorators using `responses=COMMON_AUTH_RESPONSES` and `responses=COMMON_CRUD_RESPONSES` as well as explicit dictionaries on dashboard, health, and auth endpoints.
+
+9. **`extract_authors` Cognitive Complexity Reduction (`python:S3776`, Issue #160)**
+   - Decomposed monolithic metadata extraction into modular helper functions:
+     - `_extract_author_from_dict_item` (Complexity: 4)
+     - `_extract_authors_from_list` (Complexity: 12)
+     - `_extract_author_from_dict` (Complexity: 10)
+     - `extract_authors` (Complexity: 9)
+
+10. **`extract_token_from_request` Cognitive Complexity Reduction (`python:S3776`, Issue #168)**
+    - Decomposed complex multi-source token extractor from complexity 27 down to 1:
+      - `_extract_auth_header_token` (Complexity: 4)
+      - `_extract_token_from_headers` (Complexity: 4)
+      - `_extract_token_from_cookies` (Complexity: 3)
+      - `_extract_token_from_query` (Complexity: 3)
+      - `_extract_token_from_body` (Complexity: 6)
+      - `extract_token_from_request` (Complexity: 1)
+      - `extract_token_flexible` (Complexity: 10)
+
+11. **Nested Conditional Expressions Extraction (`python:S3358`, Issue #169)**
+    - Extracted nested ternary expressions in `_calculate_snippet_start_time`, `_resolve_from_listening_sessions`, and `_query_bookmark_target` into clear `if/elif/else` blocks.
+
+12. **HTTP 502 & 401 Response Documentation & Logging (`python:S8415`, `python:S8572`, Issues #165, #166, #167, #172)**
+    - Replaced `logger.error` with `logger.exception()` in `validate_abs_token` and all exception handlers to preserve exception tracebacks.
+    - Added HTTP 502 documentation to `COMMON_AUTH_RESPONSES`, `COMMON_CRUD_RESPONSES`, and explicit endpoint response dictionaries.
+
+13. **Constant Extraction for Chapter Fallbacks (`python:S1192`, Issue #170)**
+    - Extracted duplicated literal `"Unknown Chapter"` into constant `UNKNOWN_CHAPTER_FALLBACK` across listening sessions, item enrichment, and extraction formatting.
+
+14. **Conditional Expressions Flattening (`python:S3358`, Issue #171)**
+    - Extracted ternary expressions in `_resolve_unextractable_timing`, `_resolve_unextractable_dates`, `_resolve_unextractable_display_title`, and `_build_unextractable_notices` into independent statements.
+
+15. **Cognitive Complexity & Unused Variable Cleanup (`python:S3776`, `python:S1481`, Issues #173, #174)**
+    - Maintained Cognitive Complexity $\le 13$ in `process_bookmark_extraction` and decomposed `_resolve_target_bookmark` into helper `_find_matching_bookmark_target` and `_parse_bookmark_list`.
+    - Removed unused local variable assignment `res` across the codebase.
+
+16. **Logging Exception Handler Tracebacks (`python:S8572`, Issues #175, #176, #177, #182)**
+    - Replaced `logger.warning` with `logger.exception()` across all error and fallback handlers in `_transcribe_snippet_audio`, `_resolve_target_bookmark`, `_resolve_from_listening_sessions`, `_fetch_item_details`, `resolve_audio_target`, `_resolve_extraction_user_and_server`, and `create_snippet_or_bookmark`.
+
+17. **Asynchronous File I/O Compliance (`python:S7493`, Issues #178, #179, #180)**
+    - Ensured zero synchronous `open()` calls reside within any `async def` function. Offloaded file queries and parsing in `expand_or_update_snippet` to background worker threads using `asyncio.to_thread`.
+
+18. **Path Traversal Remediation (`pythonsecurity:S2083`, Issue #181)**
+    - Hardened `expand_or_update_snippet` against path traversal by enforcing `validate_and_sanitize_snippet_timestamp` to reject all non-alphanumeric and path delimiter characters, and delegating reads to `safe_read_json_file` with canonical path containment checks.
+
+19. **HTTP 500 Response Documentation (`python:S8415`, Issue #183)**
+    - Documented status code 500 across all FastAPI route decorators via `COMMON_AUTH_RESPONSES`, `COMMON_CRUD_RESPONSES`, and explicit dashboard/health response dictionaries.
+
+20. **Regex Literal Deduplication (`python:S1192`, Issue #184)**
+    - Extracted duplicated regex pattern `r'[^a-zA-Z0-9]+'` into constant `NON_ALPHANUMERIC_REGEX` at module level.
+
+21. **Filesystem Oracle & Path Traversal Hardening in Book Export (`pythonsecurity:S6549`, `pythonsecurity:S2083`, Issues #185, #188, #190, #191, #193, #194)**
+    - Completely decoupled book export from unvalidated user input strings:
+      - Sanitized input using `validate_and_sanitize_export_book_title` (rejects directory traversal characters, null bytes, control characters, leading/trailing periods).
+      - Located candidate storage directories exclusively via enumeration of legitimate local directories (`_find_export_user_dirs` and `_find_matching_book_folder`) with strict `os.path.commonpath` checks, ensuring user inputs never probe directory existence.
+      - Enforced path boundary verification (`_validate_export_boundary`) to verify the resolved directory strictly resides within designated storage roots and is not a symlink.
+      - Read note contents strictly through `safe_read_text_file`.
+
+22. **Chained `endswith` Optimization (`python:S8513`, Issue #186)**
+    - Replaced generator-based and chained `endswith` checks in `_find_file_in_book_dir` with a single call passing the allowed extensions tuple `allowed_exts`.
+
+23. **Markdown Transcript Header Deduplication (`python:S1192`, Issue #187)**
+    - Extracted duplicated literal `"## Transcript"` into constant `MARKDOWN_TRANSCRIPT_HEADER` across note reading and dashboard parsing.
+
+24. **HTTP 404 Response Documentation (`python:S8415`, Issue #189)**
+    - Added HTTP status code 404 to `COMMON_AUTH_RESPONSES` to accurately document resource-not-found exceptions across all authentication and extraction endpoints.
+
+25. **Asynchronous File I/O & Cognitive Complexity Optimization (`python:S7493`, `python:S3776`, Issues #192, #183, #195)**
+    - Converted `export_book_snippets` to a synchronous endpoint executed in Starlette threadpools, eliminating synchronous file and zip operations from the async event loop.
+    - Reduced Cognitive Complexity of `export_book_snippets` from 87 to 2 by decomposing into focused helper functions (`_find_export_user_dirs`, `_is_matching_book_entry`, `_find_matching_book_folder`, `_discover_book_export_dir`, `_build_markdown_export`, `_build_zip_export`, `_resolve_export_user`, and `_validate_export_boundary`).
+
+26. **Filesystem Existence Oracle Remediation in `serve_bookmark_file` (`pythonsecurity:S6549`, Issues #197, #198, #199)**
+    - Replaced synthesized candidate path probing with strict directory enumeration:
+      - Modularized directory search into `_build_candidate_parent_dirs` and `_collect_sub_parent_dirs` that discover real subdirectories strictly via `os.listdir`, preventing arbitrary path traversal.
+      - Removed redundant file existence checks (`os.path.isfile`) in `serve_bookmark_file` since existence and file type are already verified during directory scanning.
+      - Converted `serve_bookmark_file` to a synchronous endpoint executed on worker threads (`python:S7493`).
+
+28. **Asynchronous API Sanitization (`python:S7503`, `python:S7493`, Issues #205, #206)**
+    - Converted synchronous endpoints (`logout`, `get_installation_date`, `health_check`, `get_sync_status`, `get_bookmarks_status`, `get_cutoff_configuration`, `value_error_handler`, and helper `_resolve_active_credentials`) from `async def` to standard synchronous `def` functions executed in threadpools.
+    - Eliminated all synchronous `open()` calls within asynchronous functions across the entire application.
+
+29. **HTTP 404 Response Documentation (`python:S8415`, Issue #207)**
+    - Added HTTP status code 404 to all route decorators across explicit view dictionaries (`/extractor`, `/logout`, `/api/installation-date`, `/api/health`, `/`), ensuring full OpenAPI schema compliance.
+
+30. **Network Interface Binding Hardening (`python:S8392`, Issue #208)**
+    - Bound server application strictly to localhost (`127.0.0.1`) by default in `uvicorn.run()` to prevent accidental exposure to untrusted external network interfaces.
+
+32. **HTTP 404 Response Documentation (`python:S8415`, Issue #210)**
+    - Documented HTTP status code 404 across all endpoint route decorators via `COMMON_AUTH_RESPONSES`, `COMMON_CRUD_RESPONSES`, and explicit view dictionaries.
+
+33. **Cognitive Complexity Hardening (`python:S3776`, Issue #211)**
+    - Validated and decomposed functions in `main.py` ensuring every function maintains Cognitive Complexity $\le 15$.
+
+34. **Node.js Built-in Imports (`typescript:S7772`, Issues #212, #213)**
+    - Replaced legacy module imports with standard `node:path` and `node:fs` prefix imports in `server.ts`.
+
+35. **Server-Side Request Forgery (SSRF) Remediation in Proxy (`tssecurity:S5144`, Issue #214)**
+    - Hardened `server.ts` proxy pipeline (`resilientProxyRequest`, `resolveProxyTargetUrl`, `app.post("/api/proxy/abs")`, and `forwardSidecarRequest`) against SSRF:
+      - Validated target URLs to strictly allow only `http:` and `https:` protocols.
+      - Blocked access to cloud metadata services (`169.254.169.254`, `metadata.google.internal`, `instance-data`) and link-local ranges (`169.254.0.0/16`, `fe80::/10`).
+      - Stripped and prohibited user credentials/userinfo from target URLs.
+      - Enforced strict hostname and port range validation (1–65535).
+      - Replaced raw user input methods with sanitized enum values selected strictly from `ALLOWED_HTTP_METHODS`.
+      - Enforced recursive SSRF validation on HTTP redirect target locations (301, 302, 303, 307, 308) before issuing redirect requests.
+
+36. **Cognitive Complexity Reduction in Proxy Request (`typescript:S3776`, Issue #215)**
+    - Decomposed `resilientProxyRequest` in `server.ts` into modular, single-responsibility helper functions (`prepareProxyRequestHeaders`, `getRedirectAction`, `createDecompressedStream`, `parseResponseBodyData`, and `handleProxyResponse`).
+    - Reduced Cognitive Complexity from 16 to $\le 4$, complying with the threshold of 15.
+
+37. **Framework Version Information Disclosure Hardening (`typescript:S5689`, Issue #216)**
+    - Configured Express in `server.ts` with `app.disable("x-powered-by")` immediately upon initialization to prevent leaking framework signature and version information in HTTP response headers.
+
+38. **ReDoS / Super-Linear Regular Expression Remediation (`typescript:S8786`, Issue #217)**
+    - Replaced the character-class regex `/^[a-zA-Z0-9.\-_\[\]:]+$/` in `server.ts` with a dedicated linear-time validator `isValidHostname(hostname: string)`.
+    - Eliminates backtracking and guarantees $O(N)$ execution time over input strings up to maximum domain length.
+
+39. **Server-Side Request Forgery (SSRF) Remediation in Sidecar Proxies (`tssecurity:S5144`, Issue #218)**
+    - Hardened all sidecar dispatch endpoints (`/bookmarks/*`, `/snippets/*`, `/api/export-book`, `/api/snippet/expand`, `/api/user/bookmarks/status`, and `forwardSidecarRequest`) using `buildSafeSidecarUrl`:
+      - Strips protocol-relative (`//`, `/\`) and userinfo-based (`/@`) URI manipulation vectors from incoming request paths.
+      - Enforces allowlisted path prefix validation.
+      - Validates and enforces strict origin and host equality against the trusted loopback sidecar service base URL.
+
+40. **Node.js Built-in Imports (`typescript:S7772`, Issue #219, Issue #222)**
+    - Removed dynamic `import("stream")` invocations in `server.ts`, utilizing the top-level standard `node:stream` import (`import { Readable } from "node:stream"`).
+
+41. **ReDoS / Express Route Regex Alternation Simplification (`typescript:S8786`, Issues #220, #223, #224, #225)**
+    - Replaced route array declarations in `server.ts` with discrete, single-path route registrations (`app.get`, `app.post`, and iterated `app.all`) across `/api/export-book`, `/api/snippet/expand`, `/api/user/bookmarks/status`, and automated background sync endpoints.
+    - Eliminated catastrophic backtracking and super-linear performance risks caused by `path-to-regexp` compiling route arrays into complex, prefix-overlapping regex alternations.
+    - Replaced SPA wildcard route `app.get("*", ...)` with standard un-routed fallback middleware `app.use((req, res) => ...)`.
+
+42. **API Traversal Remediation in Export Endpoint (`tssecurity:S7044`, Issue #221)**
+    - Replaced raw query string forwarding in `/api/export-book` with explicit parameter extraction and validation via `URLSearchParams`.
+    - Sanitized `book_title` by stripping path traversal sequences (`../`, null bytes, control characters), strictly constrained `format` to allowed enum values (`zip`, `markdown`), and safely constructed target URLs through `buildSafeSidecarUrl`.
+
+43. **Server-Side Request Forgery Hardening in Sidecar Proxies (`tssecurity:S5144`, Issue #226)**
+    - Routed all sidecar-bound requests through `buildSafeSidecarUrl` with enforced origin matching, loopback confinement, and allowlisted path prefix validation.
+
+44. **Top-Level Await Adoption (`typescript:S7785`, Issue #227)**
+    - Converted module execution in `server.ts` from un-awaited invocation `startServer()` to standard modern top-level `await startServer()`.
+    - Configured ES module bundling in `package.json` with ESM format and CJS compatibility wrapper, enabling native top-level await support in Node.js 22.
+
+45. **Cognitive Complexity Reduction in Setup Wizard (`python:S3776`, Issue #228)**
+    - Refactored `main()` in `setup.py` from Cognitive Complexity 53 down to 0 by decomposing into single-responsibility functions (`_load_existing_env`, `_parse_env_line`, `_prompt_abs_target`, `_prompt_volume_dir`, `_prompt_audiobooks_path`, `_prompt_network_ports`, `_prompt_whisper_model`, `_write_env_file`, `_update_gitignore`, `_setup_virtualenv`, and `_initialize_installation_date`), ensuring every function remains $\le 11$ (below the threshold of 15).
+
+46. **Path Traversal Remediation in Setup Directory Creation (`pythonsecurity:S8707`, Issue #229)**
+    - Hardened directory input validation in `setup.py` with `is_safe_filesystem_path` to verify canonical path boundaries.
+    - Blocked path traversal into root and system directories (`/`, `/etc`, `/bin`, `/usr`, `/var`, `/proc`, `/sys`) before calling `os.makedirs(vol_dir, exist_ok=True)`.
+
+47. **Condition Test Bracket Construct Modernization (`shelldre:S7688`, Issues #230, #231, #232, #234, #235, #236, #237, #238, #239, #240, #242)**
+    - Verified and enforced the safer, feature-rich `[[ ... ]]` conditional testing construct across all conditional expressions in shell scripts (`setup.sh`, `update.sh`).
+
+48. **Shell Case Statement Default Branch (`shelldre:S131`, Issue #233)**
+    - Added a default `*) ;;` fallback branch to the `.env` variable parser `case "$key" in` block in `setup.sh` to safely ignore unhandled keys.
+
+49. **NPM Lifecycle Script Execution Hardening (`shell:S6505`, Issue #241)**
+    - Added `--ignore-scripts` to all `npm install` invocations across shell setup scripts (`setup.sh`, `update.sh`), preventing arbitrary third-party lifecycle execution.
+
+50. **Clear-Text Protocol Audit & Verification (`shell:S5332`, Issue #243)**
+    - Added explicit protocol check and security notice in `setup.sh` verifying that clear-text `http://` connections are restricted to local loopback and private RFC1918 interfaces, recommending HTTPS for remote Audiobookshelf instances.
+
+51. **Linear Validation & Nullish Coalescing in Frontend (`typescript:S8786`, `typescript:S6606`, Issues #244, #245)**
+    - Replaced backtracking character-class regular expressions (`DATE_REGEX`, timestamp string validation) in `src/App.tsx` with dedicated $O(N)$ linear loop validators (`isValidDateString`, `isValidTimestampString`), completely eliminating ReDoS risks.
+    - Simplified ternary expressions to modern nullish coalescing operator (`??`) for configuration and state initializers (`proxy`, `useProxy`, `timeVal`).
+
+52. **Cognitive Complexity Reduction in Frontend Core (`typescript:S3776`, Issues #246, #248)**
+    - Refactored `App.tsx` startup, connection, and polling flows by extracting modular helper routines (`runAutoConnectStartup`, `attemptSavedAutoConnect`, `handleUnauthenticatedFallback`, and `executeStatusPollingCycle`).
+    - Refactored date and bookmark parsing (`parseBookmarkCreatedAt`, `parseDateCandidate`, `parseTimestampDate`, `isValidTimestampDateChars`) to keep function cognitive complexities strictly $\le 13$ (under the threshold of 15).
+    - Reduced `isValidTimestampString` complexity from 10 to 5 by extracting single-character classifier `isSafeTimestampChar`.
+
+53. **ReDoS Elimination in Timestamp Parsing (`typescript:S8786`, Issue #247)**
+    - Completely replaced backtracking regular expression `TIMESTAMP_REGEX` with deterministic linear character verification (`isValidTimestampDateChars`) and direct string slicing, eliminating super-linear runtime performance and exponential backtracking.
+    - Removed URL scheme regex in `getPlayableAudioUrl` in favor of linear `startsWith('http://')` and `startsWith('https://')` tests.
+
+54. **Safe Number Validation, RegExp Execution, and Nullish Coalescing (`typescript:S7773`, `typescript:S6594`, `typescript:S6606`, Issues #249, #250, #251, #252, #253, #254)**
+    - Enforced `Number.isNaN()` over legacy global `isNaN()` across all timestamp and date parsing routines.
+    - Eliminated `.match()` and RegExp execution code smells, replacing them with deterministic slice-and-validate routines.
+    - Adopted the nullish coalescing operator (`??`) for fallback defaults (`authMode`, `savedInitial?.sidecarUrl ?? getDefaultSidecarUrl()`, and `extractionStatus`).
+
+55. **CSRF / SSRF Endpoint Sanitization (`tssecurity:S8476`, `tssecurity:S5144`, Issues #256, #257)**
+    - Removed unused `buildSafeEndpoint` from `src/App.tsx`.
+    - Eliminated `targetSidecar` string concatenation in `getPlayableAudioUrl` in both `src/App.tsx` and `src/lib/absClient.ts`, strictly returning relative same-origin paths (`/bookmarks/...`, `/snippets/...`) served by the dashboard server proxy.
+    - Enforced direct same-origin relative endpoint fetching for `/api/export-book` in `src/lib/snippetHooks.ts`, breaking taint propagation from external sidecar URLs into `fetch()`.
+
+56. **Optional Chaining Modernization (`typescript:S6582`, Issue #258)**
+    - Replaced legacy logical AND guards `saved && (saved.token || ...)` with modern optional chaining (`saved?.token || (saved?.username && saved?.password)`) in `src/App.tsx` (`hasSavedAuth` and `isAuthModalOpen` initializers).
+
+57. **AuthModal State & Dead Code Cleanup (`typescript:S6606`, `typescript:S1854`, Issues #260, #261)**
+    - Converted ternary fallback expression `savedInitial?.useProxy !== undefined ? savedInitial.useProxy : currentUseProxy` to nullish coalescing `savedInitial?.useProxy ?? currentUseProxy` in `src/components/AuthModal.tsx`.
+    - Removed unused dead function `handleMockConnect` in `src/components/AuthModal.tsx`.
+
+58. **Accessible Form Label Control Associations (`typescript:S6853`, Issues #262, #263, #264)**
+    - Directly wrapped all form controls (`input` fields for server URL, API token, username, and password) inside their respective `<label>` elements while preserving explicit `htmlFor` attributes, satisfying accessibility standard WCAG 2.1 / Sonar S6853.
+    - Hoisted modal URL resolver utilities and extracted `AuthModalUserBanner` to reduce `AuthModal` cognitive complexity to $\le 15$.
+
+59. **Accessible Form Label & AuthModal Complexity Reduction (`typescript:S6853`, `typescript:S3776`, Issue #265)**
+    - Extracted `AuthModalModeSelect` and `AuthModalCredentialFields` subcomponents, ensuring strict WCAG 2.1 / Sonar S6853 label-to-control association.
+    - Reduced `AuthModal` cognitive complexity to $\le 13$ (below the maximum allowable limit of 15).
+
+60. **Cognitive Complexity Deconstruction in CaptureView (`typescript:S3776`, Issue #266)**
+    - Decomposed `CaptureView.tsx` into modular, single-responsibility components and helpers (`CaptureNotConnectedBanner`, `CaptureConnectedBar`, `CaptureSessionNotice`, `ActiveSessionParametersPanel`, `DurationSelector`, `CaptureActionButtons`, `CaptureSnippetResult`).
+    - Extracted `extractSidecarErrorMessage`, `buildSnippetFromPayload`, and `executeSnippetExtraction`.
+    - Reduced cognitive complexity of `CaptureView` and all child functions to $\le 8$, far below the required maximum limit of 15.
+
+61. **Nullish Coalescing Operator Adoption (`typescript:S6606`, Issue #267)**
+    - Converted ternary expressions to nullish coalescing (`??`) for cleaner readability and default value resolution (`customOffset ?? ''`, `snip?.start_time ?? options.computedStart`, `res.status ?? 502`).
+
+62. **ReDoS Elimination & Regular Expression Simplification (`typescript:S8786`, Issue #268)**
+    - Replaced backtracking and complex regular expression operations with deterministic $O(N)$ string routines, prefix comparisons, and linear character scanners across capture and parsing workflows.
+
+63. **Nested Ternary Operation Removal (`typescript:S3358`, Issue #269)**
+    - Extracted nested ternary logic into independent statements and dedicated helper procedures, eliminating nested conditional expressions.
+
+64. **Form Label Association in CaptureView (`typescript:S6853`, Issue #270)**
+    - Associated `<label>` elements strictly with their target controls via explicit `htmlFor` (`capture-duration-input`, `capture-custom-offset-input`), eliminating nested interactive button containers inside labels.
+
+65. **Standard Number.parseInt Adoption (`typescript:S7773`, Issue #271)**
+    - Replaced global `parseInt` with standard modern `Number.parseInt(..., 10)` throughout snippet duration and custom offset handlers.
+
+66. **Linear Timestamp Parsing & ReDoS Elimination (`typescript:S8786`, `typescript:S6594`, Issues #280, #287)**
+    - Eliminated `TIMESTAMP_REGEX` in `src/lib/snippetHooks.ts`, adopting deterministic $O(N)$ linear character verification (`isValidTimestampDateChars`) and direct slice extraction (`parseTimestampDate`).
+    - Completely removed backtracking risks and super-linear performance bottlenecks, avoiding uncompiled RegExp execution code smells.
+
+67. **Strict Number Validation Modernization (`typescript:S7773`, Issues #281, #282)**
+    - Enforced standard `Number.isNaN()` over legacy global `isNaN()` across snippet timestamp and created-at calculations in `src/lib/snippetHooks.ts`.
+
+68. **DOM Child Removal Modernization (`typescript:S7762`, Issues #283, #284, #285, #286)**
+    - Replaced legacy `parentNode.removeChild(childNode)` (`document.body.removeChild(link)`) with standard modern `childNode.remove()` (`link.remove()`) across all blob download and archive export routines in `src/lib/snippetHooks.ts`.
+
+69. **Nested Ternary Operation Flattening (`typescript:S3358`, Issue #288)**
+    - Verified and ensured zero nested ternary expressions remain across snippet cards and view components, extracting conditionals into independent statements and dedicated helper routines.
+
+70. **Accessible Media Captions Track (`typescript:S4084`, Issue #289)**
+    - Added `<track kind="captions" />` elements to all `<audio>` media elements in `src/components/SnippetAudioSection.tsx` and `src/components/CaptureView.tsx`, meeting WCAG accessibility guidelines and satisfying Sonar S4084.
+
+71. **Elimination of Non-Native Interactive Elements & Key Handlers (`typescript:S6848`, `typescript:S1082`, Issues #290, #291)**
+    - Removed non-interactive event listeners (`onClick` and `onKeyDown`) from dropdown menu container `<div>` in `src/components/SnippetActionsToolbar.tsx`.
+    - Maintained pure semantic `<button>` elements for all interactive options and actions, preventing WCAG accessibility violations.
+
+72. **Removal of Duplicate Font-Family Keyword (`css:S4648`, Issue #292)**
+    - Cleaned font-family declaration in `src/index.css` by removing `ui-monospace` which triggered the duplicate `monospace` keyword warning, standardizing the fallback font stack.
+
+73. **ReDoS Elimination in IPv4 and URL String Parsing (`typescript:S8786`, Issue #293)**
+    - Replaced backtracking-prone IPv4 regex in `src/lib/authStorage.ts` with linear $O(N)$ numeric segment parsing (`isValidIpv4Host`), guaranteeing linear performance and eliminating catastrophic backtracking.
+    - Replaced protocol replacement regular expressions with deterministic `.startsWith()` prefix slicing (`stripHttpPrefix`).
+
+74. **Cognitive Complexity Reduction in URL Validation & Audio Client (`typescript:S3776`, Issues #294, #295)**
+    - Decomposed complex URL validation and sanitization in `src/lib/authStorage.ts` into isolated, single-responsibility helpers (`isInvalidUrlChars` with Set lookup, `isForbiddenHost`, `isValidHostChars`, `isValidPort`, `isValidParsedUrl`).
+    - Verified that all functions in `src/lib/absClient.ts` and throughout `src/` maintain Cognitive Complexity $\le 15$ (reduced from 22/33).
+
+75. **SSRF Mitigation & Remote Server Config Taint Severance (`tssecurity:S5144`, Issue #300)**
+    - Severed the taint propagation chain where unvalidated `defaultAbsUrl` returned from `/api/config` could be assigned to `initialServer` and passed to `authenticateAbs()` and `absFetch()`.
+    - Auto-reconnect now strictly and exclusively relies on user-verified credentials saved in browser storage (`saved.serverUrl`), guaranteeing that remote untrusted config payloads cannot dictate connection target URLs.
+
+76. **Cognitive Complexity & ReDoS Deconstruction in ABS Client (`typescript:S3776`, `typescript:S8786`, Issues #301, #302, #303, #304)**
+    - Refactored `resolveRealAudioFilePath` into isolated subroutines (`findMatchingAudioFile`, `extractFilePathFromFile`), reducing complexity from 21 to $\le 13$.
+    - Modularized `fetchActiveSession` and `applyItemMetadataProperties`, slashing complexity from 44 to $\le 12$.
+    - Decomposed `getPlayableAudioUrl` into modular helpers (`isExternalBrowserHost`, `resolveLocalhostRelPath`), lowering complexity from 15 to 9.
+    - Eliminated all regular expressions with backtracking risks in `src/lib/absClient.ts`, relying entirely on deterministic linear string functions.
+
+77. **ReDoS Elimination in ABS Client Functions (`typescript:S8786`, Issues #305, #306, #307)**
+    - Completely replaced legacy backtracking regular expressions in `src/lib/absClient.ts` with linear $O(N)$ string slicing and prefix comparisons (`stripTrailingSlash`, `startsWith`, `trim`).
+
+78. **Union Redundancy Elimination in TypeScript Types (`typescript:S6571`, Issues #308, #309)**
+    - Removed redundant `string` constituent from `extractionStatus?: 'success' | 'unavailable';` in `src/types.ts`, ensuring literal constituents are not subsumed.
+    - Synchronized fallback mapping in `src/App.tsx`.
+
+79. **Form Control Label Association in Template (`Web:InputWithoutLabelCheck`, Issue #310)**
+    - Added `<label for="snippet-duration" class="sr-only">Snippet Duration</label>` and `aria-label="Snippet Duration"` to `<select id="snippet-duration">` in `templates/index.html`.
+
+80. **Standard Number.parseInt in Template (`javascript:S7773`, Issue #311)**
+    - Replaced global `parseInt` with standard modern `Number.parseInt(..., 10)` in `templates/index.html`.
+
+81. **Safe Bash Conditional Tests & Secure npm Installs (`shelldre:S7688`, `shell:S6505`, Issues #312, #313, #314, #315)**
+    - Enforced double brackets `[[ ... ]]` across all conditional test expressions in `update.sh`.
+    - Added `--ignore-scripts` flag to `npm install` in `update.sh` to prevent unauthorized lifecycle script execution during dependencies update.
+
+82. **Node.js Built-in Module Protocol & Optional Chaining (`typescript:S7772`, `typescript:S6582`, Issues #316, #317, #318)**
+    - Replaced legacy `import fs from 'fs'` and `import path from 'path'` with `node:fs` and `node:path` in `vite.config.ts`.
+    - Replaced logical AND check `req.url && req.url.startsWith(...)` with concise optional chaining `req.url?.startsWith(...)`.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

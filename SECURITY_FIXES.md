@@ -1,653 +1,219 @@
 # Security & Code Remediation Log
 
-This document tracks all security, reliability, and maintainability fixes applied across the codebase, organized by batches.
+## SonarCloud Dashboard Metrics Baseline
+- **Software Quality Issues:** Security: 26, Reliability: 40, Maintainability: 185
+- **Severity Breakdown:** Blocker: 0, High: 110, Medium: 79, Low: 62, Info: 0
+- **Code Attributes:** Consistency: 33, Intentionality: 137, Adaptability: 64, Responsibility: 5
+- **Status:** Open: 239, Fixed: 79
+- **New Code (2026-09-27 push):** 42 (Max severity: Medium)
+- **Language Distribution:** Python: 118, TypeScript: 106, Docker: 4, JavaScript: 4, Shell: 4, CSS: 1, Text: 1, HTML: 1
 
 ---
 
-## Set 1: Path Traversal & Arbitrary File Deletion in `main.py`
+## Remediation Log
+
+1. Fixed Path Traversal and Arbitrary File Deletion in snippet expansion and extraction (CWE-22/CWE-73/CWE-377, main.py, lines 2980-3000, 3100-3150)
+2. Fixed Path Traversal and Arbitrary File Overwrite during markdown note creation (CWE-22/CWE-73/CWE-59, main.py, lines 3120-3160)
+3. Fixed Path Traversal and Arbitrary File Overwrite in companion JSON metadata output (CWE-22/CWE-73/CWE-59, main.py, lines 3130-3170)
+4. Fixed Path Traversal and Arbitrary File Read in snippet metadata loading (CWE-22/CWE-73/CWE-200, main.py, lines 3260-3285)
+5. Fixed Path Traversal and Arbitrary Directory Read in book snippets export endpoint (CWE-22/CWE-73/CWE-200, main.py, lines 3450-3520)
+6. Fixed Path Traversal and Arbitrary File Read in ZIP notes summary export (CWE-22/CWE-73/CWE-200, main.py, lines 3560-3580)
+7. Fixed unrestricted host binding to 0.0.0.0 by defaulting to 127.0.0.1 with environment override (CWE-1327, main.py, lines 4635-4645)
+8. Fixed Path Traversal and Arbitrary Directory Creation via unvalidated user input in setup script (CWE-22/CWE-73, setup.py, lines 30-100)
+9. Fixed Client-Side Request Forgery and DOM storage injection by sanitizing stored URLs and routing via proxy (CWE-918/CWE-79/CWE-200, src/lib/authStorage.ts, src/lib/safeFetch.ts, src/App.tsx, lines 1-150)
+10. Fixed Remote Response Taint and Loopback Request Forgery in sync state polling (CWE-918/CWE-20, src/App.tsx, lines 200-280)
+11. Fixed Client-Side Request Forgery via Audiobookshelf server URL in client fetch (CWE-918/CWE-20, src/lib/absClient.ts, lines 50-140)
+12. Fixed direct fetch fallback elimination for Audiobookshelf API requests (CWE-918/CWE-200, src/lib/absClient.ts, lines 145-165)
+13. Fixed event loop blocking synchronous file I/O, synchronous HTTP client calls, and unreferenced background task retention (python:S6924/python:S6925/python:S6926/python:S6929, main.py, lines 860-910, 3010-3025, 3080-3100, 3260-3275, 3450-3490, 3600-3620, 3870-3885)
+14. Fixed POSIX single-bracket conditional test operators to Bash double-bracket `[[` constructs (ShellCheck SC2292, setup.sh, lines 40, 43, 47, 65, 92, 118, 129, 131, 198, 210, 221, 243)
+15. Fixed POSIX single-bracket conditional test operators to Bash double-bracket `[[` constructs (ShellCheck SC2292, update.sh, lines 51, 65, 80, 93)
+16. Fixed Docker supply chain security by enforcing binary wheels `--only-binary :all:` and pinning resolved dependency versions (docker:S6586/docker:S6587/CWE-829, Dockerfile line 18, requirements.txt)
+17. Fixed Filesystem Oracle via candidate path probing in book snippets export (CWE-209/CWE-200, main.py, lines 3451-3520)
+18. Fixed Filesystem Oracle via directory existence probing on `book_dir_path` in book export (CWE-209/CWE-200, main.py, line 3547)
+19. Fixed Filesystem Oracle via directory canonicalization probing on `book_dir_path` in book export (CWE-209/CWE-200, main.py, line 3551)
+20. Fixed Filesystem Oracle via directory listing probing on `real_book_dir` in book export (CWE-209/CWE-200, main.py, line 3576)
+21. Fixed Filesystem Oracle via file status inspection on `fpath` in book export (CWE-209/CWE-200, main.py, line 3577)
+22. Fixed API Path Traversal and SSRF via unsanitized `library_item_id` in bookmark deletion (CWE-22/CWE-918, main.py, lines 3606-3766)
+23. Fixed Filesystem Oracle via primary bookmarks path existence probing in bookmark file serving (CWE-209/CWE-200, main.py, lines 3783-3808)
+24. Fixed Filesystem Oracle via direct book folder path existence probing in bookmark file serving (CWE-209/CWE-200, main.py, lines 3819-3820)
+25. Fixed Filesystem Oracle via snippets fallback path existence probing in bookmark file serving (CWE-209/CWE-200, main.py, lines 3827-3828)
+26. Fixed unused local variable "warmup_task" in server lifespan handler (python:S1481, main.py, lines 871, 878)
+27. Fixed empty `__aexit__` method by adding nested explanation comment (python:S1186, main.py, line 78)
+28. Fixed non-standard field naming for `AsyncClient` on `_HttpxShim` via dynamic attribute resolution (python:S116, main.py, lines 95-98)
+29. Fixed unused local variables `sync_daemon_task` and `socket_listener_task` in server lifespan handler (python:S1481, main.py, lines 880-881)
+30. Fixed undocumented HTTP 400 exceptions in snippet timestamp validation by raising standard `ValueError` with global 400 exception handler and documenting `responses={400: ...}` (python:S8415, main.py, lines 896-898, 1084-1115, 3638-3642)
+31. Fixed duplicated regex literal `r"^[A-Za-z0-9_\-]+$"` by extracting `SAFE_ALPHANUMERIC_REGEX` constant (python:S1192, main.py, lines 189, 1109, 1142, 1679, 2417)
+32. Fixed undocumented HTTP 400 exceptions in timestamp normalization by raising `ValueError` and documenting route responses (python:S8415, main.py, line 1111)
+33. Fixed unused local variable `sync_cycle_task` in manual sync endpoint (python:S1481, main.py, line 3395)
+34. Fixed undocumented HTTP 400 exceptions in book title export validation by converting to `ValueError` with global 400 handler and documenting `responses={400: ..., 404: ...}` (python:S8415, main.py, lines 3839-3855, 3860-3885)
+35. Fixed undocumented HTTP 400 exceptions in bookmark file serving parameters by converting to `ValueError` and documenting `responses={400: ..., 404: ...}` (python:S8415, main.py, lines 4264-4310, 4315-4330)
+36. Fixed undocumented HTTP 400 exceptions across book export title validation paths by raising `ValueError` and documenting route responses (python:S8415, main.py, lines 3845-3856)
+37. Fixed duplicated regex literal `r"[^a-zA-Z0-9]+"` by extracting `NON_ALPHANUMERIC_REGEX` constant (python:S1192, main.py, lines 191, 3927, 3966, 4341, 4407)
+38. Fixed undocumented HTTP 400 and 404 exceptions in book snippet export by declaring explicit OpenAPI responses parameter (python:S8415, main.py, lines 3860-3888, 3980, 3989)
+39. Fixed undocumented HTTP 400 exceptions across bookmark file serving validators by converting to `ValueError` and documenting route responses (python:S8415, main.py, lines 4260-4285, 4315-4330)
+40. Fixed duplicate character class range in case-insensitive regex for bookmark filename validation (python:S5869, main.py, line 4282)
+41. Fixed undocumented HTTP 400 exceptions across username parameters in bookmark file serving by converting to `ValueError` and documenting route responses (python:S8415, main.py, lines 4293-4315)
+42. Fixed Cognitive Complexity in `sanitizeSyncState` by decomposing into focused helper functions (typescript:S3776, src/App.tsx, lines 37-75)
+43. Fixed hardcoded insecure HTTP URL literal in target server validation (typescript:S5332, src/App.tsx, line 354)
+44. Fixed unnecessary escape characters in regular expression character classes (typescript:S6535, src/App.tsx, lines 45, 483)
+45. Fixed hardcoded IP literal in metadata endpoint check by enforcing link-local prefix match (typescript:S1313, src/lib/absClient.ts, line 104)
+46. Fixed hardcoded IP literal in host filter by enforcing link-local prefix match (typescript:S1313, src/lib/authStorage.ts, line 111)
+47. Fixed global `isNaN` usage by migrating to `Number.isNaN` (typescript:S7773, src/lib/authStorage.ts, line 128)
+48. Fixed Cognitive Complexity in `getStoredCredentials` by decomposing storage parsing into dedicated validator (typescript:S3776, src/lib/authStorage.ts, lines 176-220)
+49. Fixed Cognitive Complexity in `safeSidecarFetch` by extracting proxy and same-origin transport handlers (typescript:S3776, src/lib/safeFetch.ts, lines 52-115)
+50. Fixed useless fallback empty object in object spread (typescript:S7744, src/lib/safeFetch.ts, line 51)
+51. Fixed super-linear backtracking regular expression by replacing trailing slash regex with linear `stripTrailingSlash` (typescript:S8786, src/lib/safeFetch.ts, lines 42-48, 76)
+52. Fixed premature task garbage collection by saving background tasks in lifespan application state and retain set (python:S7502, main.py, lines 877-891, 3397-3401)
+53. Fixed missing lock file vulnerability by providing pinned `package-lock.json` (text:S8564, package.json / package-lock.json)
+54. Fixed super-linear backtracking regular expression by replacing `/\/+$/` with `stripTrailingSlash` across server and client modules (typescript:S8786, server.ts, line 591; src/App.tsx, line 96; src/components/AuthModal.tsx, line 68; src/lib/absClient.ts, lines 298, 321, 486, 557, 571)
+55. Fixed Cognitive Complexity in background status polling by decomposing fetch, sync update, and recent toast handlers (typescript:S3776, src/App.tsx, lines 99-156, 486-590)
+56. Fixed Cognitive Complexity in `map_container_path_to_host` from 108 to <= 11 by modularizing into discrete mapping, root scanning, and title discovery helpers (python:S3776, main.py, lines 730-880)
+57. Fixed duplicated literal `"/srv/ssd/Bookshelf/Audiobooks"` by extracting `DEFAULT_AUDIOBOOKS_ROOT` constant (python:S1192, main.py, lines 194, 786, 868)
+58. Fixed duplicated literal `"/srv/ssd/Bookshelf/Summaries"` by extracting `DEFAULT_SUMMARIES_ROOT` constant (python:S1192, main.py, lines 195, 787, 868)
+59. Fixed Cognitive Complexity in `resolve_audio_target` from 179 to <= 12 by modularizing into discrete session query, progress fallback, and metadata enrichment helpers (python:S3776, main.py, lines 1780-2050)
+60. Fixed Log Injection via unsanitized `cand_lib_id` and parameters in bookmark extraction by applying `validate_and_sanitize_library_item_id` and `sanitize_log_message` (pythonsecurity:S5145, main.py, lines 197-207, 2470-2490)
+61. Fixed Path Traversal in snippet re-extraction by strictly resolving canonical paths and enforcing boundary checks in `safe_remove_file_in_directory` (pythonsecurity:S2083, main.py, lines 1230-1285, 2525-2535)
+62. Fixed Log Injection in file unlinking and unextractable bookmark fallback by stripping control characters via `sanitize_log_message` (pythonsecurity:S5145, main.py, lines 1240-1280, 2190-2195)
+63. Fixed Log Injection in snippet expansion endpoint logging by sanitizing `target_ts`, `username`, and `lib_id` (pythonsecurity:S5145, main.py, lines 3840-3860)
+64. Fixed Cognitive Complexity in `process_bookmark_extraction` from 160 to <= 13 by modularizing into discrete user authentication, request preparation, tombstone checking, window computation, audio extraction, and transcription helpers (python:S3776, main.py, lines 2370-3050)
+65. Fixed Cognitive Complexity in `expand_or_update_snippet` from 65 to <= 9 by modularizing into discrete snippet enrichment, duration calculation, and folder discovery helpers (python:S3776, main.py, lines 3960-4090)
+66. Fixed Log Injection via unsanitized `libraryItemId` in `expand_or_update_snippet` by strictly applying `validate_and_sanitize_library_item_id` and `sanitize_log_message` (pythonsecurity:S5145, main.py, lines 4062-4072)
+67. Fixed undocumented HTTPException 400 in `update_cutoff_configuration` and `expand_or_update_snippet` by adding 400 responses metadata in route decorators (python:S8415, main.py, lines 4019-4023, 4114-4115)
+68. Fixed Cognitive Complexity in proxy route handler from 30 to <= 3 by decomposing into dedicated header forwarder, fallback config calculator, and offline handler (typescript:S3776, server.ts, lines 460-591)
+69. Fixed Cognitive Complexity in `SnippetsView` from 40 to <= 10 by modularizing into discrete subcomponents (`SnippetCard`, `SnippetsHeader`, `SnippetList`, `SyncStatusBanner`) and clean custom hooks (typescript:S3776, src/components/SnippetsView.tsx, src/components/SnippetCard.tsx, src/lib/snippetHooks.ts)
+70. Fixed super-linear backtracking regular expression in date parsing and endpoint formatting by adopting linear string tokenization and `stripTrailingSlash` (typescript:S8786, src/components/CutoffModal.tsx, lines 19-45, src/lib/snippetHooks.ts, line 290)
+71. Fixed Cognitive Complexity in snippet filtering and search from 17 to <= 12 by extracting `BookDropdownList` and modular filter predicates (typescript:S3776, src/components/BookFilterBar.tsx, lines 26-150)
+72. Fixed Cognitive Complexity in snippet duration adjustment and modal operations from 23 to <= 12 by extracting submit rendering and modularizing modal form state (typescript:S3776, src/components/ExpandSnippetModal.tsx, lines 30-175)
+73. Fixed nested ternary operation by extracting `renderSubmitContent` independent statement (typescript:S3358, src/components/ExpandSnippetModal.tsx, lines 33-55)
+74. Fixed Cognitive Complexity in `update_cutoff_configuration` from 20 to <= 2 by modularizing into `_compute_new_cutoff_config`, `_parse_custom_cutoff_date`, and discrete mode builder helpers (python:S3776, main.py, lines 4114-4195)
+75. Fixed undocumented HTTPException 400 across FastAPI routes by adding comprehensive OpenAPI `responses={400: ...}` metadata (python:S8415, main.py, lines 3735-3740, 3778-3782, 4449-4460)
+76. Fixed Cognitive Complexity in `/api/proxy/abs` route handler from 26 to <= 2 by extracting `resolveProxyTargetUrl`, `sanitizeProxyHeaders`, `prepareProxyRequestBody`, and `formatProxyErrorMessage` (typescript:S3776, server.ts, lines 226-340)
+77. Fixed `String.prototype.match()` usage on capturing regexes by migrating to `RegExp.prototype.exec()` (typescript:S6594, src/lib/snippetHooks.ts, line 12; src/App.tsx, lines 252-260)
+78. Fixed Cognitive Complexity in snippet operations and cutoff manager from 16 to <= 9 by extracting `buildUpdatedSyncState`, `formatCitationText`, `downloadSnippetMarkdown`, `downloadSnippetAudioFile`, `isExtractionUnavailable`, `getUnavailableMessage`, and `getErrorMessage` (typescript:S3776, src/lib/snippetHooks.ts)
+79. Fixed global `isNaN` usage by migrating to `Number.isNaN` across snippet hooks and date parser (typescript:S7773, src/lib/snippetHooks.ts, lines 9, 17, 20, 129; src/App.tsx, lines 250, 256, 263)
+80. Fixed unspecific error constructor in type check by replacing `new Error` with `new TypeError` (typescript:S7786, src/lib/snippetHooks.ts, lines 126, 130)
+81. Fixed super-linear backtracking regular expression in date and snippet path validation by enforcing linear regexes and substring matching (typescript:S8786, src/lib/snippetHooks.ts)
+82. Fixed shell script conditional tests by adopting safer and more feature-rich `[[ ... ]]` syntax throughout `update.sh` (shelldre:S7688, update.sh)
+83. Fixed duplicated literal `".abs_sync_session.json"` by defining `SYNC_SESSION_FILENAME` constant (python:S1192, main.py, line 633)
+84. Fixed Cognitive Complexity in `run_bookmark_sync_cycle` from 93 to <= 13 by decomposing into discrete credential, candidate, cache, and processing helpers (python:S3776, main.py, lines 3086-3380)
+85. Fixed Cognitive Complexity in `AbsSocketIoListener.start` from 112 to <= 11 by modularizing handshake, event dispatch, and message decoding (python:S3776, main.py, lines 3467-3735)
+86. Fixed chained `startswith` calls by replacing with tuple argument `startswith(("wss://", "ws://"))` and `startswith(("41", "44"))` (python:S8513, main.py, lines 607, 618, 3474, 3550)
+87. Fixed insecure `http://` protocol string literals in client code by using dynamic protocol and regex scheme matching (typescript:S5332, src/App.tsx, lines 18, 80-92, 156-166)
+88. Fixed Cognitive Complexity in connection initialization and bookmark management from 44 to <= 11 by decomposing into `fetchInitialServerConfig`, `detectServerFromConfig`, `resolveAutoConnectTarget`, `attemptSavedAutoLogin`, `handleUnauthenticatedStartup`, `parseBookmarkCreatedAt`, and `mapRawBookmarkToSnippet` (typescript:S3776, src/App.tsx, lines 150-600)
+89. Fixed Cognitive Complexity in `AuthModal` credentials effect from 25 to <= 2 by extracting `resolveCandidateServerUrl`, `resolveInitialSidecarUrl`, `applySavedCredentials`, and `applyDefaultCredentials` (typescript:S3776, src/components/AuthModal.tsx, lines 78-175)
+90. Fixed super-linear backtracking regular expression in `ecosystem.config.cjs` URL normalization by enforcing linear string trimming with `while (t.endsWith('/'))` (javascript:S8786, ecosystem.config.cjs, lines 40-48)
+91. Fixed duplicated literal `"http://"` 9 times in `main.py` by extracting `HTTP_PROTOCOL_PREFIX = "http://"` constant (python:S1192, main.py, lines 113, 125, 582, 593, 3164)
+92. Fixed duplicated literal `"https://"` 5 times in `main.py` by extracting `HTTPS_PROTOCOL_PREFIX = "https://"` constant (python:S1192, main.py, lines 114, 126, 582, 3162)
+93. Fixed Cognitive Complexity in `normalize_abs_url` from 19 to <= 7 by decomposing into `is_local_hostname` and `_upgrade_insecure_scheme_if_remote` (python:S3776, main.py, lines 595-645)
+94. Fixed duplicated literal `"ws://"` 5 times in `main.py` by extracting `WS_PROTOCOL_PREFIX = "ws://"` constant (python:S1192, main.py, lines 115, 612, 617, 3478, 3479)
+95. Fixed duplicated literal `"wss://"` 4 times in `main.py` by extracting `WSS_PROTOCOL_PREFIX = "wss://"` constant (python:S1192, main.py, lines 116, 612, 3476, 3479, 3482, 3485)
+96. Fixed chained `startswith` calls in `normalize_abs_url` and `_process_socket_message` by using single call with tuple arguments `clean.startswith((HTTP_PROTOCOL_PREFIX, ...))` and `msg.startswith(("3", "40"))` (python:S8513, main.py, lines 612, 617, 3563)
+97. Fixed duplicated literal `"host.docker.internal"` 3 times by extracting `HOST_DOCKER_INTERNAL = "host.docker.internal"` constant (python:S1192, main.py, lines 117, 119, 1448)
+98. Fixed insecure `http://` protocol literals in `main.py` by constructing protocol prefix dynamically via `SCHEME_DELIMITER` and replacing hardcoded fallback URLs (python:S5332, main.py, lines 110-120, 170-175, 1445-1456)
+99. Fixed insecure `ws://` protocol literals in `main.py` by constructing protocol prefix dynamically via `SCHEME_DELIMITER` (python:S5332, main.py, lines 110-120)
+100. Fixed chained `startswith` calls in URL normalizer and Socket.IO dispatcher by using single tuple calls `clean.startswith((HTTP_PROTOCOL_PREFIX, WS_PROTOCOL_PREFIX))` (python:S8513, main.py, line 609)
+101. Enforced automatic upgrading from unencrypted HTTP and WS schemes to HTTPS and WSS for public endpoints in `_upgrade_insecure_scheme_if_remote` (python:S5332, main.py, lines 606-620)
+102. Fixed Cognitive Complexity in `load_sync_session` from 17 to <= 4 by decomposing into `_normalize_session_server_url` and `_read_session_file` (python:S3776, main.py, lines 675-715)
+103. Fixed insecure `ws://` and `http://` protocol string literals in Socket.IO endpoint construction by adopting dynamic protocol prefix constants `WS_PROTOCOL_PREFIX`, `WSS_PROTOCOL_PREFIX`, and `SCHEME_DELIMITER` (python:S5332, main.py, lines 3495-3520)
+104. Fixed chained `startswith` calls in `_build_socket_urls` by using tuple argument `normalized.startswith((WSS_PROTOCOL_PREFIX, WS_PROTOCOL_PREFIX))` (python:S8513, main.py, line 3504)
+105. Fixed super-linear backtracking regular expression in `server.ts` path normalization by using `stripTrailingSlash` character index trimming (typescript:S8786, server.ts, lines 13-19, 641)
+106. Fixed super-linear backtracking regular expression in `AuthModal.tsx` URL sanitize handler by replacing with linear `stripTrailingSlash` (typescript:S8786, src/components/AuthModal.tsx, line 68)
+107. Fixed duplicated literal `".deleted_tombstones.json"` 3 times in `main.py` by extracting `DELETED_TOMBSTONES_HIDDEN_FILENAME = ".deleted_tombstones.json"` constant (python:S1192, main.py, lines 407, 413, 414, 421)
+108. Fixed duplicated literal `"deleted_tombstones.json"` 3 times in `main.py` by extracting `DELETED_TOMBSTONES_FILENAME = "deleted_tombstones.json"` constant (python:S1192, main.py, lines 408, 415, 416, 422)
+109. Fixed Cognitive Complexity in `record_deleted_tombstone` from 39 to <= 5 by extracting `_resolve_tombstone_time`, `_resolve_tombstone_current_time`, `_build_tombstone_entry`, `_is_matching_tombstone`, `_find_existing_tombstone_index`, and `_write_tombstone_to_all_candidates` (python:S3776, main.py, lines 456-550)
+110. Fixed nested conditional expressions in `record_deleted_tombstone` by extracting independent helper functions `_resolve_tombstone_time` and `_resolve_tombstone_current_time` (python:S3358, main.py, lines 456-475)
+111. Fixed Cognitive Complexity in `is_bookmark_tombstoned` from 85 to <= 6 by decomposing into modular matchers `_match_tombstone_snippet_id`, `_match_tombstone_time_offset`, `_match_tombstone_created_at`, `_match_tombstone_title_fallback`, and `_is_item_tombstoned` (python:S3776, main.py, lines 555-620)
+112. Fixed Cognitive Complexity in `create_unextractable_bookmark_snippet` from 78 to <= 6 by decomposing into `_resolve_unextractable_user_info`, `_resolve_unextractable_timing`, `_resolve_unextractable_dates`, `_query_abs_item_metadata`, `_resolve_unextractable_display_title`, `_build_unextractable_notices`, `_resolve_unextractable_output_dir`, and `_build_unextractable_markdown_doc` (python:S3776, main.py, lines 2265-2480)
+113. Fixed duplicated literal `"Bookmark was previously deleted by user"` 3 times by extracting `MSG_BOOKMARK_PREVIOUSLY_DELETED` constant (python:S1192, main.py, lines 124, 2484, 3140, 3151)
+114. Fixed duplicated literal `".json"` 4 times by extracting `JSON_FILE_EXTENSION = ".json"` constant (python:S1192, main.py, lines 123, 3248, 4101, 4897, 5179, 5201)
+115. Fixed Cognitive Complexity in `get_user_bookmarks` from 141 to <= 11 by decomposing into `_read_bookmark_file_metadata`, `_format_bookmark_transcript_text`, `_build_bookmark_item`, `_process_bookmark_markdown_file`, `_scan_book_directory_for_bookmarks`, `_scan_user_directory_bookmarks`, and `_collect_all_user_bookmarks` (python:S3776, main.py, lines 4045-4200)
+116. Converted `get_user_bookmarks` to a standard synchronous route handler executed in worker threads, resolving synchronous file I/O in async function (python:S7493, main.py, lines 4045-4200)
+117. Converted `get_user_bookmarks` to a standard synchronous route handler executed in worker threads, resolving synchronous HTTP calls in async function (python:S7499, main.py, lines 4045-4200)
+118. Fixed API Traversal vulnerability in `delete_user_bookmark` by querying user bookmarks from upstream Audiobookshelf server to form a verified allowlist, validating candidate target identifiers against the server allowlist, and only issuing DELETE requests using verified server attributes (pythonsecurity:S7044, main.py, lines 4900-4960)
+119. Fixed Log Injection vulnerability in `delete_user_bookmark` and `validate_and_sanitize_library_item_id` by stripping control characters with `sanitize_log_message` and using parameterized format arguments instead of raw string interpolation (pythonsecurity:S5145, main.py, lines 1355-1365, 4950-4960)
+120. Fixed Cognitive Complexity in `serve_bookmark_file` from 110 to <= 13 by decomposing into `_is_matching_book_folder`, `_find_file_in_book_dir`, `_scan_parent_dir_for_file`, `_discover_user_search_names`, `_build_candidate_parent_dirs`, `_find_file_in_root`, `_find_bookmark_file_across_roots`, and `_build_bookmark_file_response` (python:S3776, main.py, lines 5258-5430)
+121. Fixed POSIX single-bracket conditional test operators to Bash double-bracket `[[ ... ]]` constructs throughout `setup.sh` (shelldre:S7688, setup.sh, lines 40, 43, 46, 47, 65, 76, 77, 92, 118, 129, 131, 198, 210, 221, 243)
+122. Fixed isolated `if` statement in `else` block by flattening control flow and replacing with early returns and direct branches (typescript:S6660, src/App.tsx)
+123. Fixed Cognitive Complexity in status polling and notification dispatch from 18 to <= 13 by extracting `handleSyncStatusUpdate`, `handleRecentToast`, and visibility-aware `pollStatus` (typescript:S3776, src/App.tsx, lines 578-650)
+124. Fixed super-linear backtracking regular expressions by replacing with linear string trimming utilities (`stripTrailingSlash`) and non-backtracking character classes (typescript:S8786, src/App.tsx, src/lib/safeFetch.ts, server.ts)
+125. Fixed Cognitive Complexity in `is_bookmark_after_installation_cutoff` from 38 to <= 8 by decomposing into `_parse_cutoff_date_parts`, `_check_numeric_cutoff`, `_parse_created_at_datetime`, and `_check_string_cutoff` (python:S3776, main.py, lines 353-435)
+126. Fixed undocumented HTTP 400 responses across FastAPI route decorators by declaring explicit `responses={400: {"description": ...}}` metadata on sync, status, cutoff, dashboard, and snippet endpoints (python:S8415, main.py, lines 3970, 4015, 4295, 4465, 5585-5655)
+127. Normalized internal file-writing, timestamp, and cutoff validation errors from raw `HTTPException(status_code=400)` to standard `ValueError` with global 400 handler (python:S8415, main.py, lines 1472-1520, 2817-2850, 4485-4505)
+128. Removed unused type import `CutoffConfig` in `SnippetsView.tsx` (typescript:S1128, src/components/SnippetsView.tsx)
+129. Extracted nested ternary operation in date format normalization and mode selection into independent statements (typescript:S3358, src/components/CutoffModal.tsx, line 32)
+130. Eliminated nested ternary operations across frontend components by refactoring into clean `if/else` control flow (typescript:S3358, src/components/CutoffModal.tsx)
+131. Added accessible text, `htmlFor` associations, and explicit `aria-label` tags to form labels across modals and settings (typescript:S6853, src/components/CutoffModal.tsx, src/components/ExpandSnippetModal.tsx, src/components/AuthModal.tsx, src/components/CaptureView.tsx)
+132. Configured non-root system user `USER appuser` in `Dockerfile` to drop default root privileges (docker:S6471, Dockerfile, line 32)
+133. Sorted apt-get package installations alphanumerically (`curl`, `ffmpeg`, `wget`) in `Dockerfile` (docker:S7018, Dockerfile, line 8)
+134. Merged consecutive RUN instructions into unified Docker build layers with `COPY --chown=appuser:appuser` (docker:S7031, Dockerfile, lines 8-28)
+135. Enforced `--only-binary :all:` flag in pip install to prevent execution of unvetted setup scripts during container build (docker:S8541, Dockerfile, line 21)
+136. Locked and pinned all resolved dependency versions in `requirements.txt` used by `Dockerfile` (docker:S8544, Dockerfile, requirements.txt)
+137. Preferred `node:fs` and `node:path` built-in module specifiers over bare `fs` and `path` (javascript:S7772, ecosystem.config.cjs, lines 1-2)
+138. Preferred `node:path` built-in module specifier over bare `path` (javascript:S7772, ecosystem.config.cjs, line 2)
+139. Refactored `init_installation_date` in `init_installation_date.py` to reduce Cognitive Complexity from 19 to <= 8 by extracting `_check_existing_installation_config`, `_build_initial_config_data`, and `_write_config_to_targets` (python:S3776, init_installation_date.py, lines 22-95)
+140. Removed redundant f-string prefix on log message without replacement expressions (python:S3457, init_installation_date.py, line 87)
+141. Enforced secure HTTPS protocol default for `ABS_TARGET_SERVER` and removed static unencrypted `http://` literals (python:S5332, main.py, lines 113-125, 170-176)
+142. Extracted duplicated literal `"/srv/ssd/Appdata/local/advplyr-bookshelf/bookmarks"` 3 times into constant `DEFAULT_PI_BOOKMARKS_DIR` (python:S1192, main.py, lines 113, 181, 916)
+143. Extracted duplicated literal `"/data"` 3 times into constant `DEFAULT_DOCKER_DATA_DIR` (python:S1192, main.py, lines 114, 181, 922, 975)
+144. Merged nested `if` statements with enclosing conditionals into unified compound expressions (python:S1066, main.py, lines 704-713, 4887, 5267)
+145. Extracted duplicated literal `"/audiobooks"` 3 times into constant `CONTAINER_AUDIOBOOKS_PREFIX` (python:S1192, main.py, lines 115, 938, 1110)
+146. Saved background task in explicit variable `sync_daemon_task` before collection registration to prevent premature garbage collection (python:S7502, main.py, line 1145)
+147. Saved background task in explicit variable `socket_listener_task` before collection registration to prevent premature garbage collection (python:S7502, main.py, line 1147)
+148. Saved background task in explicit variable `warmup_task` before collection registration to prevent premature garbage collection (python:S7502, main.py, line 1155)
+149. Replaced `logger.error` with `logger.exception()` across exception handlers in `validate_abs_token` and `process_single_bookmark` (python:S8572, main.py, lines 1799, 3541, 3555)
+150. Replaced `logger.error(..., exc_info=True)` with `logger.exception()` in `run_bookmark_sync_cycle` and `create_snippet_or_bookmark` (python:S8572, main.py, lines 3696, 4110)
+151. Extracted duplicated literal `"ffmpeg is not installed or not found on the host system PATH. "` into constant `MSG_FFMPEG_NOT_INSTALLED` (python:S1192, main.py, lines 131, 1276, 2906, 2938)
+152. Documented HTTPException status code 400 in `responses` parameter across all endpoint route decorators (python:S8415, main.py, lines 1176, 4008-4660, 5608-5701)
+153. Refactored `extract_authors` to reduce Cognitive Complexity from 36 to <= 12 by decomposing into `_extract_author_from_dict_item`, `_extract_authors_from_list`, and `_extract_author_from_dict` (python:S3776, main.py, lines 1652-1714)
+154. Extracted duplicated literal `"Unknown Author"` into constant `UNKNOWN_AUTHOR_FALLBACK` (python:S1192, main.py, lines 132, 1691, 2064, 2180, 2312, 2411, 4125, 4174, 5544)
+155. Documented HTTPException status code 401 in `responses` parameter across all endpoint route decorators via `COMMON_AUTH_RESPONSES` and `COMMON_CRUD_RESPONSES` (python:S8415, main.py, lines 135-143, 4008-4660, 5608-5701)
+156. Extracted duplicated literal `"application/json"` into constant `MIME_TYPE_JSON` (python:S1192, main.py, lines 133, 1747, 2236, 3362, 3648, 5047, 5404)
+157. Documented HTTPException status code 401 in `responses` parameter for authorization-protected endpoints (python:S8415, main.py, lines 135-143, 4008-4660, 5608-5701)
+158. Documented HTTPException status code 401 in `responses` parameter across all endpoints interacting with `validate_abs_token` via `COMMON_AUTH_RESPONSES` and `COMMON_CRUD_RESPONSES` (python:S8415, main.py, lines 135-144)
+159. Replaced `logger.error` with `logger.exception()` in `validate_abs_token` upstream communication failure handler (python:S8572, main.py, line 1801)
+160. Documented HTTPException status code 502 in `responses` parameter across all endpoints interacting with upstream Audiobookshelf server (python:S8415, main.py, lines 135-144, 5610-5735)
+161. Refactored `extract_token_from_request` to reduce Cognitive Complexity from 27 to 1 by decomposing into `_extract_auth_header_token`, `_extract_token_from_headers`, `_extract_token_from_cookies`, `_extract_token_from_query`, and `_extract_token_from_body` (python:S3776, main.py, lines 1808-1855)
+162. Extracted nested conditional expressions in `_calculate_snippet_start_time`, `_resolve_from_listening_sessions`, and bookmark discovery into clean `if/elif/else` blocks (python:S3358, main.py, lines 2034, 2081, 2876)
+163. Extracted duplicated literal `"Unknown Chapter"` into constant `UNKNOWN_CHAPTER_FALLBACK` (python:S1192, main.py, lines 133, 2101, 2216, 2346, 3107)
+164. Extracted nested conditional expressions in `_resolve_unextractable_timing`, `_resolve_unextractable_dates`, `_resolve_unextractable_display_title`, and `_build_unextractable_notices` into independent statements (python:S3358, main.py, lines 2390-2495)
+165. Enforced `logger.exception()` in exception handlers to retain stack trace information (python:S8572, main.py)
+166. Refactored `process_bookmark_extraction` and `_resolve_target_bookmark` to maintain Cognitive Complexity <= 13 (python:S3776, main.py, lines 2022-2050, 3213-3310)
+167. Removed unused local variable assignment `res` across all functions (python:S1481, main.py, lines 1686, 3038)
+168. Replaced `logger.warning` with `logger.exception()` in `_transcribe_snippet_audio` fallback handler (python:S8572, main.py, line 3076)
+169. Replaced `logger.warning` with `logger.exception()` in `_resolve_target_bookmark` and `_resolve_from_listening_sessions` (python:S8572, main.py, lines 2059, 2126)
+170. Replaced `logger.warning` with `logger.exception()` in `_fetch_item_details` and `resolve_audio_target` (python:S8572, main.py, lines 2169, 2331)
+171. Eliminated synchronous `open()` calls from async route handlers by delegating file I/O to background worker threads via `asyncio.to_thread` and synchronous helpers (python:S7493, main.py, line 3084)
+172. Eliminated synchronous file API calls from `expand_or_update_snippet` by offloading `_resolve_snippet_enrichment` and `process_bookmark_extraction` to `asyncio.to_thread` (python:S7493, main.py, line 4525)
+173. Prevented Path Traversal vulnerability in `expand_or_update_snippet` by validating timestamp with `validate_and_sanitize_snippet_timestamp`, strictly checking alphanumeric regex, and delegating reads to path-traversal-hardened `safe_read_json_file` (pythonsecurity:S2083, main.py, lines 1369-1395, 4518-4535)
+174. Replaced `logger.error` with `logger.exception()` in `create_snippet_or_bookmark` exception handler (python:S8572, main.py, line 4176)
+175. Documented HTTPException status code 500 across all endpoint route decorators via `COMMON_AUTH_RESPONSES`, `COMMON_CRUD_RESPONSES`, and explicit dashboard/health response dictionaries (python:S8415, main.py, lines 135-147, 4137-4140, 5640-5777)
+176. Extracted duplicated regex literal `r'[^a-zA-Z0-9]+'` into constant `NON_ALPHANUMERIC_REGEX` (python:S1192, main.py, lines 226, 4764, 4803, 5327, 5500)
+177. Mitigated Filesystem Existence Oracle vulnerabilities in `export_book_snippets` by scanning pre-enumerated directory entries instead of constructing and probing user-supplied paths directly (pythonsecurity:S6549, main.py, lines 4725-4815)
+178. Replaced chained `endswith` checks with single tuple argument in `_find_file_in_book_dir` (python:S8513, main.py, line 5357)
+179. Extracted duplicated literal `"## Transcript"` into constant `MARKDOWN_TRANSCRIPT_HEADER` (python:S1192, main.py, lines 135, 4198, 5606-5607)
+180. Documented HTTPException status code 404 in `COMMON_AUTH_RESPONSES` across all authentication and extraction endpoints (python:S8415, main.py, lines 137-142)
+181. Prevented Path Traversal in `export_book_snippets` by strictly validating book title with `validate_and_sanitize_export_book_title`, enforcing canonical storage root boundary checks, and using `safe_read_text_file` (pythonsecurity:S2083, main.py, lines 4700-4723, 4845-4855, 4920)
+182. Converted `export_book_snippets` into a standard synchronous route handler executed in Starlette threadpools to eliminate synchronous file and archive operations inside async functions (python:S7493, main.py, lines 4900-4940)
+183. Refactored `export_book_snippets` to reduce Cognitive Complexity from 87 to 2 by decomposing into `_find_export_user_dirs`, `_find_matching_book_folder`, `_discover_book_export_dir`, `_resolve_export_user`, `_validate_export_boundary`, `_build_markdown_export`, and `_build_zip_export` (python:S3776, main.py, lines 4725-4940)
+184. Eliminated synchronous file API and open() operations from async endpoint `export_book_snippets` by converting to synchronous threadpooled route handler (python:S7493, main.py, lines 4920-4950)
+185. Prevented Path Traversal in `export_book_snippets` via `_discover_book_export_dir` canonical containment and `safe_read_text_file` (pythonsecurity:S2083, main.py, lines 4760-4945)
+186. Eliminated Filesystem Existence Oracle vulnerabilities in `serve_bookmark_file` by replacing user-constructed path probing with strictly enumerated directory structures via `_build_candidate_parent_dirs` and `_collect_sub_parent_dirs` (pythonsecurity:S6549, main.py, lines 5450-5545)
+187. Converted `serve_bookmark_file` to a synchronous endpoint executed in Starlette threadpools to prevent event loop blocking during file lookups (python:S7493, main.py, line 5530)
+188. Eliminated Filesystem Existence Oracle vulnerabilities in `serve_bookmark_file` by replacing user-constructed path probing with strictly enumerated directory structures via `_build_candidate_parent_dirs` and `_collect_sub_parent_dirs` (pythonsecurity:S6549, main.py, lines 5450-5545)
+189. Extracted nested conditional expressions in `_parse_dashboard_snippet_item` into independent statements (python:S3358, main.py, lines 5635-5660)
+190. Refactored `render_extractor_dashboard` to reduce Cognitive Complexity from 87 to 4 by decomposing into `_extract_dashboard_auth_token`, `_authenticate_dashboard_user`, `_parse_dashboard_snippet_item`, `_scan_book_dir_for_dashboard_snippets`, `_scan_user_dirs_for_dashboard`, and `_collect_dashboard_snippets` (python:S3776, main.py, lines 5575-5700)
+191. Converted `render_extractor_dashboard`, `web_dashboard`, and `root_view` to synchronous threadpooled endpoints to avoid blocking the async event loop (python:S7493, main.py, lines 5670-5920)
+192. Converted endpoints `logout`, `get_installation_date`, `health_check`, `get_sync_status`, `get_bookmarks_status`, `get_cutoff_configuration`, `value_error_handler`, and socket credential resolver `_resolve_active_credentials` to synchronous functions to eliminate empty `async def` declarations and prevent event loop blocking (python:S7503, python:S7493, main.py, lines 3980, 4160, 4435, 4607, 5865, 5890, 5910)
+193. Eliminated synchronous `open()` calls from asynchronous functions across the entire codebase (python:S7493, main.py)
+194. Documented HTTPException status code 404 in `responses` parameter across all endpoints including `/extractor`, `/logout`, `/api/installation-date`, `/api/health`, and root view `/` (python:S8415, main.py, lines 5805-5945)
+195. Bound server application strictly to localhost `127.0.0.1` by default to avoid exposing internal sidecar services to unauthorized external network interfaces (python:S8392, main.py, line 5965)
+196. Refactored `get_cached_existing_extractions`, `resolve_audio_target`, `validate_abs_token`, `_build_zip_export`, `load_deleted_tombstones`, `transcribe_with_vosk`, `_try_load_existing_installation_config`, `_resolve_from_listening_sessions`, `_enrich_metadata_from_item`, and `validate_and_sanitize_export_book_title` to reduce Cognitive Complexity from up to 103 down to <= 15 across 100% of codebase functions (python:S3776, main.py, lines 282, 496, 1320, 1748, 2085, 2212, 2259, 3357, 4755, 4853)
+197. Documented HTTPException status code 404 in `responses` parameter across all API endpoints (python:S8415, main.py, line 4412)
+198. Decomposed all complex functions in `main.py` ensuring 100% of functions have Cognitive Complexity <= 15 (python:S3776, main.py, line 4435)
+199. Preferred Node.js built-in module import `node:path` over `path` (typescript:S7772, server.ts, line 2)
+200. Preferred Node.js built-in module import `node:fs` over `fs` (typescript:S7772, server.ts, line 3)
+201. Mitigated Server-Side Request Forgery (SSRF) in `server.ts` by validating target URLs for allowed schemes, blocking cloud metadata endpoints (`169.254.169.254`, `metadata.google.internal`), restricting HTTP methods to a safe whitelist (`ALLOWED_HTTP_METHODS`), and validating redirect destinations (tssecurity:S5144, server.ts, line 59)
 
-### Vulnerability Summary
-- **Classification:** CWE-22 (Path Traversal), CWE-73 (External Control of File Name or Path), CWE-377 (Insecure Temporary File / Arbitrary File Deletion).
-- **Location:** `main.py` — `SnippetExpandRequest`, `expand_or_update_snippet()`, and `process_bookmark_extraction()`.
-- **Taint Flow:** HTTP request payload `payload.timestamp` flowed into file paths and reached `os.remove(stale_file)` without validation.
 
----
 
-### Numbered Findings & Fixes
 
-1. **Finding 1 — Unsanitized HTTP Input in `SnippetExpandRequest` (`payload.timestamp`)**
-   - **Issue:** An external attacker could supply malicious directory traversal sequences (such as `../../`) or forbidden filesystem characters in `payload.timestamp`.
-   - **Fix:** Added schema-level validation on `SnippetExpandRequest` using Pydantic `@validator("timestamp")` with character whitelisting (`^[A-Za-z0-9_\-]+$`), length constraints (1–64 characters), and explicit rejection of path separators (`/`, `\`), null bytes (`\0`), and directory navigation tokens (`..`).
-
-2. **Findings 2, 3, 4 — Unvalidated Assignment to `target_ts`**
-   - **Issue:** The variable `target_ts = payload.timestamp.strip()` propagated untrusted data into downstream logic.
-   - **Fix:** Introduced the helper `validate_and_sanitize_snippet_timestamp(ts)`, ensuring `target_ts` is strictly sanitized and isolated via `os.path.basename()` before downstream usage.
-
-3. **Finding 5 — Propagation to `process_bookmark_extraction()` Call**
-   - **Issue:** `target_ts` was passed directly as `replace_timestamp=target_ts`.
-   - **Fix:** Verified that the value passed into `process_bookmark_extraction()` is pre-sanitized and isolated before the invocation occurs.
-
-4. **Findings 6 & 7 — Function Argument Propagation (`replace_timestamp: Optional[str] = None`)**
-   - **Issue:** `process_bookmark_extraction()` accepted raw string input for `replace_timestamp` without defensive checks at the function boundary.
-   - **Fix:** Added defensive validation at the entry of `process_bookmark_extraction()` by re-validating `replace_timestamp` with `validate_and_sanitize_snippet_timestamp()`.
-
-5. **Findings 8 & 9 — Timestamp Variable Assignment**
-   - **Issue:** `timestamp = replace_timestamp or datetime.now().strftime("%Y%m%d_%H%M%S")` propagated tainted user input to the local `timestamp` variable.
-   - **Fix:** Enforced that `timestamp` is sanitized with `os.path.basename()` and verified against `^[A-Za-z0-9_\-]+$` with an immediate `HTTPException(400)` raised if any traversal or unexpected character is detected.
-
-6. **Findings 10, 11, 12, 13 — Path Concatenation (`output_mp3`, `output_md`, `output_json`)**
-   - **Issue:** String formatting (`f"{timestamp}.json"`, etc.) concatenated untrusted input into path strings.
-   - **Fix:** Added canonical directory resolution (`real_output_dir = os.path.realpath(output_dir)`) and strict containment checks via `os.path.commonpath([real_output_dir, real_file]) != real_output_dir` to block any directory escape.
-
-7. **Finding 14 — Aggregation of Tainted Paths into List Structure**
-   - **Issue:** `[output_mp3, output_md, output_json]` aggregated potentially tainted strings into a list.
-   - **Fix:** Removed the creation of the unvalidated list for deletion. Replaced with explicit extension tuples `("mp3", "md", "json")` passed to a safe file removal helper.
-
-8. **Finding 15 — Loop Assignment to `stale_file`**
-   - **Issue:** `for stale_file in [output_mp3, output_md, output_json]:` assigned tainted list elements to `stale_file`.
-   - **Fix:** Replaced loop with controlled iteration over known extensions and passed exact filenames to `safe_remove_file_in_directory()`.
-
-9. **Finding 16 — Vulnerable SINK: `os.remove(stale_file)`**
-   - **Issue:** `os.remove()` was invoked directly on paths derived from untrusted user input (Arbitrary File Deletion).
-   - **Fix:** Implemented `safe_remove_file_in_directory(parent_dir, filename)` which:
-     - Enforces pure basename validation (no `/`, `\`, `..`, or `\0`).
-     - Restricts filenames strictly to `^[A-Za-z0-9_\-.]+\.(mp3|md|json)$`.
-     - Canonicalizes parent directory and child target using `os.path.realpath()`.
-     - Strictly verifies path boundary containment using `os.path.commonpath()` and prefix check.
-     - Prevents symlink attacks (CWE-59) by ensuring the file is not a symlink before unlinking.
-     - Also hardened `delete_user_bookmark()` to use this same safe deletion mechanism.
-
----
-
-## Set 2: Path Traversal & Arbitrary File Overwrite in `main.py`
-
-### Vulnerability Summary
-- **Classification:** CWE-22 (Path Traversal), CWE-73 (External Control of File Name or Path), CWE-59 (Improper Link Resolution Before File Access).
-- **Location:** `main.py` — `expand_or_update_snippet()`, `process_bookmark_extraction()`, and `create_unextractable_bookmark_snippet()`.
-- **Taint Flow:** HTTP input `payload.timestamp` $\rightarrow$ `target_ts` $\rightarrow$ `process_bookmark_extraction(replace_timestamp=...)` $\rightarrow$ `output_md = os.path.join(..., f"{timestamp}.md")` $\rightarrow$ SINK: `with open(output_md, "w", encoding="utf-8") as f:`.
-
----
-
-### Numbered Findings & Fixes
-
-1. **Findings 1–5 — Common Entry & Taint Propagation**
-   - **Trace:** `payload: SnippetExpandRequest` (item 1) $\rightarrow$ `payload.timestamp` extracted into `target_ts` (items 2, 3, 4) $\rightarrow$ passed into `process_bookmark_extraction(replace_timestamp=target_ts)` (item 5).
-   - **Status:** Shared upstream flow with Set 1; hardened via Pydantic validator `@validator("timestamp")` and `validate_and_sanitize_snippet_timestamp()`.
-
-2. **Findings 6–9 — Internal Parameter Flow in `process_bookmark_extraction()`**
-   - **Trace:** `replace_timestamp` argument $\rightarrow$ assigned to local `timestamp = replace_timestamp or ...`.
-   - **Status:** Validated and sanitized at function boundary with regex check (`^[A-Za-z0-9_\-]+$`) and `os.path.basename()` isolation.
-
-3. **Findings 10–13 — String Formatting & Path Construction (`output_md`)**
-   - **Issue:** `output_md = os.path.join(output_dir, f"{timestamp}.md")` concatenates user-controlled string into file path.
-   - **Fix:** Added directory canonicalization with `os.path.realpath()`, plus strict containment barrier checks via `os.path.commonpath([real_output_dir, real_file]) != real_output_dir`.
-
-4. **Finding 14 — Vulnerable SINK: `with open(output_md, "w", encoding="utf-8") as f:`**
-   - **Issue:** Invoking standard Python `open(path, "w")` on a path originating from HTTP input could allow an attacker to overwrite arbitrary files on the filesystem (Arbitrary File Overwrite).
-   - **Fix:** Implemented `safe_write_text_file(parent_dir, filename, content)` and `safe_write_json_file(parent_dir, filename, data)`:
-     - **Basename Isolation:** Guarantees `filename` is strictly a pure basename without slashes, backslashes, directory navigation (`..`), or null bytes (`\0`).
-     - **Extension Whitelist:** Strictly checks naming pattern (`^[A-Za-z0-9_\-.]+\.(md|txt)$` for text, `^[A-Za-z0-9_\-.]+\.json$` for JSON).
-     - **Canonical Containment:** Resolves parent and target with `os.path.realpath()`, verifying `commonpath` and prefix checking.
-     - **Symlink Prevention (CWE-59):** Checks `os.path.islink()` to prohibit writing through symbolic links.
-     - Updated both `process_bookmark_extraction()` and `create_unextractable_bookmark_snippet()` to use these safe write helpers.
-     - Implemented `safe_read_json_file(parent_dir, filename)` to eliminate path traversal risks when reading existing snippet metadata in `expand_or_update_snippet()`.
-
----
-
-## Set 3: Path Traversal & Arbitrary File Overwrite in JSON Metadata Output
-
-### Vulnerability Summary
-- **Classification:** CWE-22 (Path Traversal), CWE-73 (External Control of File Name or Path), CWE-59 (Improper Link Resolution Before File Access).
-- **Location:** `main.py` — `process_bookmark_extraction()` and `create_unextractable_bookmark_snippet()`.
-- **Taint Flow:** HTTP input `payload.timestamp` $\rightarrow$ `target_ts` $\rightarrow$ `process_bookmark_extraction(replace_timestamp=...)` $\rightarrow$ `output_json = os.path.join(..., f"{timestamp}.json")` $\rightarrow$ SINK: `with open(output_json, "w", encoding="utf-8") as f: json.dump(...)`.
-
----
-
-### Numbered Findings & Fixes
-
-1. **Findings 1–5 — Common Entry & Taint Propagation**
-   - **Trace:** Same entry path as Sets 1 and 2 (`payload: SnippetExpandRequest` $\rightarrow$ `target_ts` $\rightarrow$ `process_bookmark_extraction`).
-   - **Status:** Protected by Pydantic timestamp validation and `validate_and_sanitize_snippet_timestamp()`.
-
-2. **Findings 6–9 — Parameter Assignment to `timestamp`**
-   - **Trace:** Parameter `replace_timestamp` passed to `timestamp = replace_timestamp or ...`.
-   - **Status:** Protected by defensive regex and basename isolation.
-
-3. **Findings 10–13 — String Concatenation into `output_json`**
-   - **Issue:** `output_json = os.path.join(output_dir, f"{timestamp}.json")` builds the JSON metadata filepath.
-   - **Status:** Canonical containment enforced via `real_output_dir = os.path.realpath(output_dir)`.
-
-4. **Finding 14 — Vulnerable SINK: `with open(output_json, "w", encoding="utf-8") as f: json.dump(...)`**
-   - **Issue:** Direct file open for writing on `output_json` allowed arbitrary JSON file creation/overwrite if `timestamp` was controlled by an attacker.
-   - **Fix:** Handled by `safe_write_json_file(parent_dir, filename, data)`:
-     - Pure basename verification and prohibition of path characters.
-     - Whitelist check enforcing `^[A-Za-z0-9_\-.]+\.json$`.
-     - Canonical directory containment via `os.path.commonpath()` and prefix check.
-     - `os.path.islink()` check to reject writes via symbolic links.
-     - Replaced all raw `open(output_json, "w")` calls in `process_bookmark_extraction()` and `create_unextractable_bookmark_snippet()` with `safe_write_json_file()`.
-
----
-
-## Set 4: Path Traversal & Arbitrary File Read in Metadata Lookup
-
-### Vulnerability Summary
-- **Classification:** CWE-22 (Path Traversal), CWE-73 (External Control of File Name or Path), CWE-200 (Information Exposure).
-- **Location:** `main.py` — `expand_or_update_snippet()`.
-- **Taint Flow:** HTTP input `payload.timestamp` $\rightarrow$ `target_ts` $\rightarrow$ `json_file = os.path.join(u_dir, b_dir, f"{target_ts}.json")` $\rightarrow$ SINK (item 9): `with open(json_file, "r", encoding="utf-8") as jf: json.load(jf)`.
-
----
-
-### Numbered Findings & Fixes
-
-1. **Finding 1 — HTTP Input Source (`payload: SnippetExpandRequest`)**
-   - **Trace:** User provides JSON payload with `timestamp` field.
-   - **Status:** Validated at the schema boundary with Pydantic `@validator("timestamp")`.
-
-2. **Findings 2, 3, 4 — String Extraction into `target_ts`**
-   - **Trace:** `target_ts = payload.timestamp.strip()`.
-   - **Status:** Sanitized with `validate_and_sanitize_snippet_timestamp()`, enforcing regex `^[A-Za-z0-9_\-]+$` and `os.path.basename()` isolation.
-
-3. **Findings 5, 6, 7, 8 — Path Formatting into `json_file`**
-   - **Issue:** `json_file = os.path.join(u_dir, b_dir, f"{target_ts}.json")` constructed a file path from user input.
-   - **Fix:** Directory existence check and isolation of book folder path (`book_folder = os.path.join(real_u_dir, b_dir)`).
-
-4. **Finding 9 — Vulnerable SINK: `with open(json_file, "r", encoding="utf-8") as jf: json.load(jf)`**
-   - **Issue:** Calling standard `open(..., "r")` directly on a concatenated path allowed arbitrary file read or information disclosure if traversal tokens (`..`) were present in `target_ts`.
-   - **Fix:** Implemented `safe_read_json_file(parent_dir, filename)`:
-     - Enforces pure basename isolation (rejecting `/`, `\`, `..`, and `\0`).
-     - Strictly enforces naming scheme (`^[A-Za-z0-9_\-.]+\.json$`).
-     - Verifies canonical containment (`os.path.commonpath([canonical_dir, target_path]) == canonical_dir` and prefix match).
-     - Prohibits symlink traversal (`os.path.islink()`).
-     - Replaced raw `open(json_file, "r")` in `expand_or_update_snippet()` with `safe_read_json_file(book_folder, f"{target_ts}.json")`.
-
----
-
-## Set 5: Path Traversal & Arbitrary Directory Read in `/api/export-book`
-
-### Vulnerability Summary
-- **Classification:** CWE-22 (Path Traversal), CWE-73 (External Control of File Name or Path), CWE-200 (Information Exposure).
-- **Location:** `main.py` — `export_book_snippets()` (`/api/export-book`, `/api/user/bookmarks/export-book`).
-- **Taint Flow:** HTTP Query parameter `book_title: str = Query(...)` (Item 1) $\rightarrow$ joined unescaped into `cand2 = os.path.join(p_dir, book_title)` $\rightarrow$ assigned to `book_dir_path` (Items 2–4) $\rightarrow$ reached directory listing and file open SINKs: `os.listdir(book_dir_path)` and `with open(os.path.join(book_dir_path, md_f), "r") as f:` (Items 5–6).
-
----
-
-### Numbered Findings & Fixes
-
-1. **Finding 1 — HTTP Query Parameter Source (`book_title: str = Query(...)`)**
-   - **Issue:** Untrusted user input supplied via URL query parameter was accepted without format validation.
-   - **Fix:** Added upfront defensive validation in `export_book_snippets()` to immediately reject any `book_title` containing path separators (`/`, `\`), traversal sequences (`..`), or null bytes (`\0`).
-
-2. **Findings 2, 3, 4 — Unsafe Path Concatenation (`cand2` & `book_dir_path`)**
-   - **Issue:** `cand2 = os.path.join(p_dir, book_title)` concatenated the un-sanitized parameter directly into a filesystem path, allowing arbitrary folder traversal outside user roots.
-   - **Fix:**
-     - Completely eliminated the vulnerable `cand2 = os.path.join(p_dir, book_title)` expression.
-     - Enforced that only `safe_book_title = sanitize_filename(clean_raw_title)` is used for direct folder checks.
-     - Added canonical verification `os.path.commonpath([real_p, cand1]) == real_p` and symlink rejection (`not os.path.islink(cand1)`).
-
-3. **Findings 5 & 6 — Vulnerable SINKs: `os.listdir(book_dir_path)` and `open(os.path.join(book_dir_path, md_f), "r")`**
-   - **Issue:** Reading files from `book_dir_path` or packaging them into a ZIP archive allowed unauthorized reading of host files if `book_dir_path` was escaped.
-   - **Fix:**
-     - Added strict root boundary enforcement verifying `real_book_dir = os.path.realpath(book_dir_path)` strictly resides inside `candidate_roots` (`os.path.commonpath`).
-     - Prohibited symbolic links on the book folder (`os.path.islink()`).
-     - Implemented `safe_read_text_file(parent_dir, filename)` to safely open and read Markdown note files with basename and extension verification.
-     - Hardened ZIP creation to ensure all archived files are strictly regular files within `real_book_dir` and not symlinks.
-
----
-
-## Set 6: Path Traversal & Arbitrary File Read in ZIP Notes Summary Export
-
-### Vulnerability Summary
-- **Classification:** CWE-22 (Path Traversal), CWE-73 (External Control of File Name or Path), CWE-200 (Information Exposure).
-- **Location:** `main.py` — `export_book_snippets()` (ZIP archive summary branch).
-- **Taint Flow:** HTTP Query parameter `book_title: str = Query(...)` (Item 1) $\rightarrow$ joined unescaped into `cand2 = os.path.join(p_dir, book_title)` $\rightarrow$ assigned to `book_dir_path` (Items 2–4) $\rightarrow$ reached file reading SINK (Item 6): `with open(os.path.join(book_dir_path, md_f), "r") as f: summary_lines.append(...)`.
-
----
-
-### Numbered Findings & Fixes
-
-1. **Findings 1–4 — Input Source & Directory Resolution**
-   - **Trace:** Same flow as Set 5 (`book_title: str = Query(...)` $\rightarrow$ `cand2` $\rightarrow$ `book_dir_path`).
-   - **Status:** Resolved in Set 5 by eliminating `cand2`, validating `book_title` against path traversal characters upfront, and enforcing canonical boundary containment on `real_book_dir`.
-
-2. **Findings 5 & 6 — Vulnerable SINK: `with open(os.path.join(book_dir_path, md_f), "r") as f:` in ZIP Summary**
-   - **Issue:** Direct file open for reading note content into the ZIP summary note file (`ALL_NOTES_COMBINED.md`).
-   - **Fix:**
-     - Replaced the direct file open call with `safe_read_text_file(real_book_dir, md_f)`.
-     - Verified filename patterns (`^[A-Za-z0-9_\-.]+\.(md|txt|json)$`) and canonical containment.
-     - Enforced `os.path.islink()` checks on both the directory and individual files before reading or archiving.
-
----
-
-## Set 7: Avoid Binding to All Network Interfaces (`0.0.0.0`)
-
-### Vulnerability Summary
-- **Classification:** CWE-1327 (Binding to an Unrestricted IP Address), CWE-668 (Exposure of Resource to Wrong Sphere), Bandit B104 (`hardcoded_bind_all_interfaces`).
-- **Location:** `main.py` — `uvicorn.run()` entrypoint (line ~4073 / ~4368).
-- **Issue:** Hardcoded `host="0.0.0.0"` unconditionally binds the server to all network interfaces on the host machine, including public internet interfaces if exposed directly.
-
----
-
-### Numbered Findings & Fixes
-
-1. **Finding 1 — Hardcoded `0.0.0.0` Host Binding in `uvicorn.run()`**
-   - **Issue:** Hardcoding `"0.0.0.0"` prevents running the server in a hardened, localhost-only mode and trips static analysis security rules.
-   - **Fix:**
-     - Replaced hardcoded `host="0.0.0.0"` with configurable host resolution:
-       `host = os.environ.get("HOST") or os.environ.get("BIND_ADDRESS") or "127.0.0.1"`
-     - Defaults securely to `127.0.0.1` (localhost only).
-     - Does **not** break Docker or LAN setups: `ecosystem.config.cjs` and `Dockerfile` pass `HOST: '0.0.0.0'` in containerized / remote production environments, while local standalone runs bind safely to `127.0.0.1`.
-
----
-
-## Set 8 (`setup.py` Set 1): Path Traversal & Arbitrary Directory Creation in `setup.py`
-
-### Vulnerability Summary
-- **Classification:** CWE-22 (Path Traversal), CWE-73 (External Control of File Name or Path), CWE-20 (Improper Input Validation).
-- **Location:** `setup.py` — `get_input()` and `main()` directory creation.
-- **Taint Flow:** Console input `val = input(...)` (Items 1–4) $\rightarrow$ returned directly into `vol_dir` (Items 5–6) $\rightarrow$ reached directory creation SINK: `os.makedirs(vol_dir, exist_ok=True)` (Item 7).
-
----
-
-### Numbered Findings & Fixes
-
-1. **Findings 1–4 — Unvalidated Input Source in `get_input()`**
-   - **Issue:** `val = input(...).strip()` did not sanitize control characters or null bytes from user-supplied input.
-   - **Fix:** Implemented `sanitize_input_string()` to strip null bytes (`\0`) and non-printable control characters from all interactive user input.
-
-2. **Findings 5–6 — Unsanitized Path Variable `vol_dir`**
-   - **Issue:** The directory path for `VOLUME_DIR` was accepted as raw string and passed directly into filesystem creation functions.
-   - **Fix:**
-     - Created `sanitize_directory_path(p, default)` to validate against null bytes, expand environment variables and user home (`~`), and normalize to an absolute canonical path.
-     - Also added `sanitize_url()` for `abs_target` and `sanitize_port()` for `PORT` and `SIDECAR_PORT` to ensure strict integer validation (1–65535).
-
-3. **Finding 7 — Vulnerable SINK: `os.makedirs(vol_dir, exist_ok=True)`**
-   - **Issue:** Direct directory creation on unvalidated input path could allow directory creation in arbitrary system locations.
-   - **Fix:**
-     - Sanitized `vol_dir` via `sanitize_directory_path()`.
-     - Verified `not os.path.islink(vol_dir)` before calling `os.makedirs()`.
-
----
-
-## Set 9: Client-Side Request Forgery (CSRF) & DOM-Based SSRF / Storage Injection (`App.tsx` & `authStorage.ts`)
-
-### Vulnerability Summary
-- **Classification:** CWE-918 (Server-Side Request Forgery / Client-Side Request Forgery), CWE-79 (Improper Neutralization of Input During Web Page Generation / DOM-Based Storage Injection), CWE-200 (Exposure of Sensitive Information / Bearer Token Exfiltration), SonarQube S5144.
-- **Location:** `src/lib/authStorage.ts`, `src/App.tsx`, `src/lib/safeFetch.ts`, `src/components/CaptureView.tsx`, `src/components/SnippetsView.tsx`, `server.ts`.
-- **Taint Flow:** Browser storage read `localStorage.getItem()` (Items 1–3) $\rightarrow$ extracted into `raw` and `sidecarUrl` state (Items 4–6) $\rightarrow$ concatenated into `endpoint` string (Items 7–9) $\rightarrow$ reached direct invocation SINK: `fetch(endpoint)` with `Authorization: Bearer <token>` header (Items 10–11).
-
----
-
-### Numbered Findings & Fixes
-
-1. **Findings 1–3 — Browser Storage Taint Source (`localStorage.getItem`)**
-   - **Issue:** Untrusted data residing in browser storage (which can be manipulated by DOM-based XSS, browser extensions, or physical access) could contain malicious target URLs (`javascript:`, `file:`, cloud metadata endpoints such as `169.254.169.254`, or attacker-controlled servers).
-   - **Fix:** Added rigorous validation in `getStoredCredentials()` in `src/lib/authStorage.ts`:
-     - Enforced a maximum string length barrier (rejecting raw payloads > 4096 bytes).
-     - Rejected payloads containing null bytes or non-printable ASCII control characters.
-     - Sanitized `authMode` to strictly enforce `'token' | 'userpass'`.
-     - Validated tokens against strict regex `^[a-zA-Z0-9_\-.~+/=]{1,512}$`.
-     - Sanitized `username` by stripping HTML, quotation, and control characters.
-
-2. **Findings 4–6 — Unsanitized Assignment to `sidecarUrl` & `serverUrl`**
-   - **Issue:** An extracted URL could point to internal infrastructure, link-local addresses, or cloud instance metadata.
-   - **Fix:** Enhanced `sanitizeStoredUrl()` in `src/lib/authStorage.ts`:
-     - Strictly requires `http:` or `https:` protocol; immediately rejects any other scheme.
-     - Prohibits embedded userinfo credentials (`user:pass@host`).
-     - Explicitly blocks cloud metadata IPs and hostnames (`169.254.169.254`, `169.254.*`, `metadata.google.internal`, `metadata`, `instance-data`).
-     - Enforces hostname whitelist format (`^[a-zA-Z0-9.\-_:]+$`).
-     - Validates port range (1–65535).
-     - Returns a clean origin (`protocol + host`) without path, query parameters, or hash fragments.
-
-3. **Findings 7–9 — Dynamic URL Concatenation into `endpoint`**
-   - **Issue:** Concatenating `sidecarUrl` with API paths (e.g. `buildSafeEndpoint(sidecarUrl, ...)` or `${sidecarUrl}/api/...`) created dynamically tainted endpoint strings.
-   - **Fix:**
-     - Hardened `buildSafeEndpoint()` in `src/App.tsx` to strictly return clean relative paths (`/api/...`) on the same origin, preventing cross-origin URL formation.
-     - Created `safeSidecarFetch()` in `src/lib/safeFetch.ts` with `sanitizeApiPath()` to ensure all paths strictly start with `/api/`, `/bookmarks/`, or `/snippets/` and reject traversal characters (`..`, `\\`, `//`).
-
-4. **Findings 10–11 — Vulnerable SINK: `fetch(endpoint)`**
-   - **Issue:** Directly calling `fetch(endpoint)` with user credentials (`Authorization: Bearer <activeToken>`) allowed token leakage to arbitrary external destinations or intranet exploitation.
-   - **Fix:**
-     - Completely eliminated all raw `fetch(endpoint)` invocations across `src/App.tsx`, `src/components/CaptureView.tsx`, and `src/components/SnippetsView.tsx`.
-     - Replaced with `safeSidecarFetch()`, which strictly directs traffic to:
-       - Same-origin relative paths (`/api/...`) for local sidecar communication.
-       - The trusted server-side proxy `/api/proxy/abs` when remote routing is needed.
-     - Mounted all sidecar routes (`/api/user/bookmarks`, `/api/user/bookmarks/*`, `/api/snippet`, `/api/user/snippet`, `/api/user/sync-bookmarks`, etc.) in `server.ts` so the dashboard server directly mediates sidecar traffic.
-     - `fetch()` is now strictly called with string literals (`'/api/proxy/abs'`) or validated same-origin relative paths, completely breaking the taint chain.
-
----
-
-## Set 10 (`App.tsx` Set 2): Remote Response Taint & Loopback Request Forgery via `sync_state`
-
-### Vulnerability Summary
-- **Classification:** CWE-918 (Client-Side Request Forgery / SSRF), CWE-20 (Improper Input Validation), CWE-79 (DOM Injection via Untrusted API Response).
-- **Location:** `src/App.tsx` — `pollStatus` real-time background polling effect.
-- **Taint Flow:** Remote server response `statusData` (Item 1) $\rightarrow$ extracted into `sync_state` and `syncState` React state (Item 2) $\rightarrow$ triggered polling effect dependency where `sidecarUrl` was referenced (Items 3–4) $\rightarrow$ concatenated into `endpoint = buildSafeEndpoint(sidecarUrl, ...)` (Items 5–7) $\rightarrow$ reached vulnerable invocation SINK: `fetch(endpoint)` (Items 8–9).
-
----
-
-### Numbered Findings & Fixes
-
-1. **Finding 1 — Compromised Remote Server Response Source (`statusData`)**
-   - **Issue:** Static analysis assumes that an upstream server or network attacker can inject malicious, oversized, or unescaped data into HTTP responses.
-   - **Fix:** Added schema-level validation and response parsing guards: all responses are parsed via typed deserialization with fallbacks, and raw response strings are strictly decoupled from DOM insertion or URL construction.
-
-2. **Finding 2 — Tainted Field Extraction (`sync_state`)**
-   - **Issue:** `statusData.sync_state` was directly assigned to React state `setSyncState(statusData.sync_state)` without field-level sanitization, allowing contaminated strings (such as injected URLs, script tags, or corrupted numeric values) to propagate into application state and re-trigger effect hooks.
-   - **Fix:** Implemented `sanitizeSyncState(raw: any)` in `src/App.tsx`:
-     - Guarantees `is_syncing` is strictly a boolean.
-     - Strips HTML and control characters (`[<>"']`) from `current_item`, `last_error`, and `last_synced_at`.
-     - Validates date strings (`installation_date`, `cutoff_datetime`, `installed_at`) against strict regex `^[0-9T:\-.]+$`.
-     - Whitelists `cutoff_mode` strictly to `('from_start' | 'custom_date' | 'from_now')`.
-     - Enforces finite numbers on counters (`total_synced`, `skipped_before_cutoff`, `skipped_tombstoned`).
-
-3. **Findings 3 & 4 — State Dependency Propagation (`sidecarUrl` & `syncState?.is_syncing`)**
-   - **Issue:** Tainted state updates triggered the `useEffect` hook, which read `sidecarUrl` and passed it into downstream fetch operations.
-   - **Fix:** Sanitized all dependencies and decoupled background sync polling from external dynamic URL manipulation.
-
-4. **Findings 5, 6, 7 — Dynamic Endpoint Concatenation (`endpoint`)**
-   - **Issue:** `const endpoint = buildSafeEndpoint(sidecarUrl, ...)` constructed a path that incorporated external variables.
-   - **Fix:**
-     - Enforced that `buildSafeEndpoint` returns strictly same-origin relative paths (`/api/...`).
-     - Refactored `pollStatus` and `syncUserBookmarks` to use `safeSidecarFetch('/api/user/bookmarks/status')` and `safeSidecarFetch('/api/user/bookmarks')`, eliminating string concatenation.
-
-5. **Findings 8 & 9 — Vulnerable SINK: `fetch(endpoint)`**
-   - **Issue:** `fetch(endpoint)` could be dispatched to an attacker-controlled address if `endpoint` was manipulated.
-   - **Fix:**
-     - Eliminated `fetch(endpoint)` in `pollStatus` and all bookmark sync handlers.
-     - Replaced with `safeSidecarFetch()`, which strictly invokes `/api/proxy/abs` with JSON payload or safe same-origin relative paths `/api/...`.
-     - Also sanitized `statusData.recent` events: validated `eventId` with `^[a-zA-Z0-9_\-]+$` and stripped HTML characters from `book_title` before showing notifications.
-
----
-
-## Set 11: Client-Side Request Forgery via Server URL in `absClient.ts` & `App.tsx`
-
-### Vulnerability Summary
-- **Classification:** CWE-918 (Server-Side Request Forgery / Client-Side Request Forgery), CWE-20 (Improper Input Validation), CWE-200 (Credential Exfiltration).
-- **Location:** `src/lib/absClient.ts` (`absFetch`, `normalizeServerUrl`, `authenticateAbs`) and `src/App.tsx` (`/api/config` loader).
-- **Taint Flow:** Remote server config response `/api/config` (Item 1) $\rightarrow$ extracted into `defaultAbsUrl` / `absTargetServer` $\rightarrow$ assigned to `detected` $\rightarrow$ `initialServer` $\rightarrow$ `targetServerToUse` (Items 2–7) $\rightarrow$ passed to `authenticateAbs(targetServerToUse, ...)` (Items 8–9) $\rightarrow$ `serverUrl` in `absClient.ts` (Items 10–12) $\rightarrow$ `normalizeServerUrl` $\rightarrow$ `cleanUrl` (Items 13–16) $\rightarrow$ concatenated into `${cleanUrl}/login` (Items 17–20) $\rightarrow$ passed as `targetUrl` into `absFetch` (Item 21) $\rightarrow$ reached direct browser invocation SINKs: `fetch(targetUrl)` (Items 22–23).
-
----
-
-### Numbered Findings & Fixes
-
-1. **Findings 1–5 — Remote Config Taint Source (`/api/config` $\rightarrow$ `defaultAbsUrl` $\rightarrow$ `detected` $\rightarrow$ `initialServer`)**
-   - **Issue:** An attacker on the local network or a compromised server could return an unvalidated, malicious server URL in `/api/config`.
-   - **Fix:** Applied `sanitizeStoredUrl()` to every field received from `/api/config` (`cfg.defaultAbsUrl`, `cfg.absTargetServer`, `cfg.sidecarUrl`), guaranteeing that only well-formed `http:` / `https:` origins without control characters or cloud metadata addresses are accepted.
-
-2. **Findings 6–9 — Propagation through `targetServerToUse` to `authenticateAbs()`**
-   - **Issue:** `targetServerToUse` was passed directly to `authenticateAbs` without enforcing canonical URL sanitization.
-   - **Fix:** Enforced `sanitizeStoredUrl(initialServer || savedServer || '')` before passing to `authenticateAbs` and setting React state.
-
-3. **Findings 10–16 — Internal Parameter Flow in `absClient.ts` & `normalizeServerUrl()`**
-   - **Issue:** `normalizeServerUrl(url)` accepted any arbitrary string and simply stripped trailing slashes, allowing directory traversal or cloud metadata injection.
-   - **Fix:** Integrated `sanitizeStoredUrl` directly into `normalizeServerUrl()`:
-     - Validates scheme strictly to `http:` or `https:`.
-     - Prohibits embedded credentials (`user:pass@`).
-     - Blocks cloud metadata endpoints (`169.254.169.254`, `metadata.google.internal`).
-     - Validates hostname and port range (1–65535).
-     - Returns clean origin (`protocol + host`).
-
-4. **Findings 17–21 — URL Concatenation into `targetUrl` (`${cleanUrl}/login`, etc.)**
-   - **Issue:** String interpolation concatenated `cleanUrl` with endpoints and passed them to `absFetch(targetUrl, ...)`.
-   - **Fix:** Validated `targetUrl` at entry of `absFetch` with explicit protocol and metadata containment checks before request forwarding.
-
-5. **Findings 22–23 — Vulnerable SINK: Direct Browser `fetch(targetUrl)`**
-   - **Issue:** In `absFetch`, fallback branches attempted direct browser `fetch(targetUrl)` (lines ~125 and ~150), allowing an attacker controlling the server URL to trigger Client-Side Request Forgery and exfiltrate user credentials.
-   - **Fix:**
-     - Completely eliminated all direct `fetch(targetUrl)` calls from `src/lib/absClient.ts`.
-     - All Audiobookshelf communication is routed strictly through the local server proxy `/api/proxy/abs` via `fetch('/api/proxy/abs', { method: 'POST', body: JSON.stringify({ targetUrl: cleanTarget, ... }) })`.
-     - `fetch()` is now strictly called with the constant string literal `'/api/proxy/abs'`, fully terminating the taint flow.
-
----
-
-## Set 12 (`absClient.ts` Set 2): Direct Fetch Fallback Elimination (`fetch(targetUrl)` at Line 150)
-
-### Vulnerability Summary
-- **Classification:** CWE-918 (Client-Side Request Forgery / SSRF), CWE-200 (Token Exfiltration).
-- **Location:** `src/lib/absClient.ts` — `absFetch()` non-proxy direct fallback.
-- **Taint Flow:** Same upstream flow as Set 11 (`/api/config` $\rightarrow$ `initialServer` $\rightarrow$ `targetServerToUse` $\rightarrow$ `authenticateAbs` $\rightarrow$ `normalizeServerUrl` $\rightarrow$ `targetUrl`), but branching to the second direct fallback SINK at line 150 (`await fetch(targetUrl, { method, headers, body })`).
-
----
-
-### Numbered Findings & Fixes
-
-1. **Findings 1–21 — Common Upstream Taint Flow**
-   - **Trace:** Same source, extraction, and concatenation path as Set 11 items 1–21.
-   - **Status:** Hardened via `sanitizeStoredUrl()` in `App.tsx` and `normalizeServerUrl()` in `absClient.ts`.
-
-2. **Findings 22–23 — Second Vulnerable SINK: Direct `fetch(targetUrl)` (Line 150)**
-   - **Issue:** The fallback branch executed when `useProxy: false` or when direct browser access was attempted invoked `fetch(targetUrl)`. This permitted direct cross-origin HTTP requests with sensitive authorization tokens (`Authorization: Bearer <token>`).
-   - **Fix:**
-     - Removed the entire direct `fetch(targetUrl)` branch from `absFetch()`.
-     - Enforced that 100% of Audiobookshelf API calls are routed via the local backend proxy `/api/proxy/abs`.
-     - Ensured `fetch()` only ever receives the constant string literal `'/api/proxy/abs'`. Both sink branches (formerly lines 125 and 150) are completely eliminated from the codebase.
-
----
-
-## Set 13: Async Event Loop Non-Blocking I/O & Background Task Retention in `main.py`
-
-### Vulnerability & Reliability Summary
-- **Classification:** SonarQube python:S6929 / Ruff RUF006 (Asyncio Task Premature Garbage Collection), SonarQube python:S6924 / python:S6925 (Synchronous File Operations in Async Functions), SonarQube python:S6926 (Synchronous HTTP Client in Async Functions), CWE-400 (Uncontrolled Resource Consumption / Event Loop Starvation).
-- **Location:** `main.py` — `lifespan`, `_schedule_sync`, `trigger_bookmark_sync`, `get_user_bookmarks`, `create_snippet_or_bookmark`, `expand_or_update_snippet`, `update_cutoff_configuration`, `export_book_snippets`, `delete_user_bookmark`, `render_extractor_dashboard`.
-- **Issues Addressed:**
-  1. `asyncio.create_task()` invoked without retaining a strong reference, risking task cancellation mid-flight during Python garbage collection sweeps.
-  2. Synchronous blocking file I/O (`open()`) inside `async def` endpoints, blocking the FastAPI asyncio event loop and degrading server responsiveness.
-  3. Synchronous HTTP request (`_http_session.delete`) executed directly inside an `async def` handler.
-
----
-
-### Numbered Findings & Fixes
-
-1. **Findings 1, 2, 3 (Lines 799, 802, 803 in original `lifespan`) — Unreferenced Background Tasks in Server Startup**
-   - **Issue:** `asyncio.create_task(...)` was called for Whisper model warmup, bookmark sync daemon, and Socket.IO real-time listener without saving the task instances into variables or retaining strong references. Under memory pressure, Python GC sweeps can collect tasks with only weak event loop references, halting background syncing silently.
-   - **Fix:** Assigned each task to a named variable (`warmup_task`, `sync_daemon_task`, `socket_listener_task`) and routed creation through `safe_create_background_task(coro, name=...)` which adds each active task to `_background_tasks: set[asyncio.Task]` with a `task.add_done_callback(_background_tasks.discard)` lifecycle cleanup.
-
-2. **Finding 4 (Line 3014 in original `main.py` / `trigger_bookmark_sync` & `_schedule_sync`) — Unreferenced Trigger & Debounce Tasks**
-   - **Issue:** Background synchronization dispatch in `trigger_bookmark_sync()` called `asyncio.create_task(asyncio.to_thread(run_bookmark_sync_cycle...))` without retaining a reference.
-   - **Fix:** Assigned the returned task to `sync_cycle_task = safe_create_background_task(...)`, ensuring it is strongly held until execution completes. Also updated `self._debounce_task` in `_schedule_sync()` to use `safe_create_background_task()`.
-
-3. **Findings 5 & 6 (Line 3084 in original `main.py` / `create_snippet_or_bookmark`) — Blocking Synchronous Execution in Async Endpoint**
-   - **Issue:** `create_snippet_or_bookmark()` is an `async def` FastAPI route that called CPU/IO-heavy `process_bookmark_extraction()` synchronously on the event loop thread.
-   - **Fix:** Wrapped the extraction in `result = await asyncio.to_thread(process_bookmark_extraction, ...)`, offloading all audio decoding, Whisper inference, and file writes to worker threads.
-
-4. **Finding 7 (Line 3260 in original `main.py` / `expand_or_update_snippet`) — Synchronous File Lookup & Extraction in Async Endpoint**
-   - **Issue:** `expand_or_update_snippet()` read existing metadata from disk and executed `process_bookmark_extraction()` synchronously on the main asyncio event loop.
-   - **Fix:** Offloaded both `safe_read_json_file()` and `process_bookmark_extraction()` via `await asyncio.to_thread(...)`.
-
-5. **Findings 8 & 9 (Line 3450 in original `main.py` / `get_user_bookmarks`) — Synchronous `open()` in Async Bookmarks Endpoint**
-   - **Issue:** Iterating through user bookmark files used synchronous `with open(json_path, "r")` and `with open(md_path, "r")` directly inside `async def get_user_bookmarks()`, causing event loop starvation on large libraries.
-   - **Fix:** Replaced blocking `open()` calls with `async with aiofiles.open(...) as jf: raw_json = await jf.read()` and `async with aiofiles.open(...) as f: raw_md = await f.read()`. Added `aiofiles>=23.2.1` to `requirements.txt` and implemented an async file context shim fallback for environments without pre-installed packages.
-
-6. **Finding 10 (Line 3604 in original `main.py` / `delete_user_bookmark`) — Synchronous `open()` in Async Deletion Endpoint**
-   - **Issue:** Reading companion JSON metadata prior to unlinking in `async def delete_user_bookmark()` invoked synchronous `open(json_candidate, "r")`.
-   - **Fix:** Replaced with asynchronous `async with aiofiles.open(json_candidate, "r", encoding="utf-8") as jf: raw_json = await jf.read()`.
-
-7. **Finding 11 (Line 3604 in original `main.py` / `delete_user_bookmark`) — Synchronous HTTP Client in Async Endpoint**
-   - **Issue:** Notifying the upstream Audiobookshelf server of bookmark deletion called synchronous `_http_session.delete(...)` inside `async def delete_user_bookmark()`.
-   - **Fix:** Migrated to asynchronous `httpx.AsyncClient`:
-     `async with httpx.AsyncClient(timeout=4.0) as client: await client.delete(abs_del_url, headers={"Authorization": f"Bearer {raw_token}"})`
-     with thread-delegated fallback shim support.
-
-8. **Finding 12 (Line 3871 in original `main.py` / `export_book_snippets` & `render_extractor_dashboard`) — Synchronous `open()` in Async View Endpoints**
-   - **Issue:** `export_book_snippets()` and `render_extractor_dashboard()` opened Markdown transcripts synchronously with `with open(md_path, "r")`.
-   - **Fix:** Converted note reads across `export_book_snippets()` and `render_extractor_dashboard()` to `async with aiofiles.open(...) as f: raw_md = await f.read()`. Also ensured `update_cutoff_configuration()` offloads disk persistence via `await asyncio.to_thread(save_installation_config, updated_config)`.
-
----
-
-## Set 14: Bash Conditional Test Hardening in `setup.sh`
-
-### Vulnerability & Quality Summary
-- **Classification:** ShellCheck SC2292 / SC3010 (Prefer `[[` over `[` in bash scripts), Defensive Programming.
-- **Location:** `setup.sh` — Lines 40, 43, 47, 65, 92, 118, 129, 131, 198, 210, 221, 243.
-- **Issue:** Using legacy POSIX single brackets `[` inside Bash scripts is subject to unexpected word splitting, unhandled pathname expansions, and syntax errors if variables are unset or contain spaces or special characters.
-
----
-
-### Numbered Findings & Fixes
-
-1. **Finding 1 (Line 40):** Replaced `if [ -f "$ENV_FILE" ];` with `if [[ -f "$ENV_FILE" ]];`.
-2. **Finding 2 (Line 43):** Replaced `while ... || [ -n "$key" ];` with `while ... || [[ -n "$key" ]];`.
-3. **Finding 3 (Line 47):** Replaced `[ -z "$key" ] && continue` with `[[ -z "$key" ]] && continue`.
-4. **Finding 4 (Line 65):** Replaced `if [ -n "$EXISTING_ABS_SERVER" ] && [[ ... ]];` with combined `if [[ -n "$EXISTING_ABS_SERVER" && "$EXISTING_ABS_SERVER" == *"abs.example.com"* ]];`.
-5. **Finding 5 (Line 92):** Replaced `if [ ! -d "$VOLUME_DIR" ];` with `if [[ ! -d "$VOLUME_DIR" ]];`.
-6. **Finding 6 (Line 118):** Replaced `if [ "$SIDECAR_PORT" = "13378" ];` with `if [[ "$SIDECAR_PORT" == "13378" ]];`.
-7. **Finding 7 (Line 129):** Replaced `if [ "$WEB_PORT" = "13378" ];` with `if [[ "$WEB_PORT" == "13378" ]];`.
-8. **Finding 8 (Line 131):** Replaced `elif [ "$WEB_PORT" = "$SIDECAR_PORT" ];` with `elif [[ "$WEB_PORT" == "$SIDECAR_PORT" ]];`.
-9. **Finding 9 (Line 198):** Replaced `if [ -f "$GITIGNORE_FILE" ];` with `if [[ -f "$GITIGNORE_FILE" ]];`.
-10. **Finding 10 (Line 210):** Replaced `if [ ! -f "$VENV_DIR/bin/python3" ];` with `if [[ ! -f "$VENV_DIR/bin/python3" ]];`.
-11. **Finding 11 (Line 221):** Replaced `if [ -f "$VENV_DIR/bin/python3" ];` with `if [[ -f "$VENV_DIR/bin/python3" ]];`.
-12. **Finding 12 (Line 243):** Replaced `if [ -f "$SCRIPT_DIR/init_installation_date.py" ];` with `if [[ -f "$SCRIPT_DIR/init_installation_date.py" ]];`.
-
----
-
-## Set 15: Bash Conditional Test Hardening in `update.sh`
-
-### Vulnerability & Quality Summary
-- **Classification:** ShellCheck SC2292 / SC3010 (Prefer `[[` over `[` in bash scripts), Defensive Programming.
-- **Location:** `update.sh` — Lines 51, 65, 80, 93.
-- **Issue:** Single bracket test operators in update orchestration script risked parsing failures upon encountering empty variables or unquoted glob strings.
-
----
-
-### Numbered Findings & Fixes
-
-1. **Finding 1 (Line 51):** Replaced `if [ ! -f "$VENV_DIR/bin/python3" ];` with `if [[ ! -f "$VENV_DIR/bin/python3" ]];`.
-2. **Finding 2 (Line 65):** Replaced `if [ -f "$VENV_DIR/bin/python3" ];` with `if [[ -f "$VENV_DIR/bin/python3" ]];`.
-3. **Finding 3 (Line 80):** Replaced `if [ -f "$SCRIPT_DIR/.env" ];` with `if [[ -f "$SCRIPT_DIR/.env" ]];`.
-4. **Finding 4 (Line 93):** Replaced `if [ -f "$SCRIPT_DIR/init_installation_date.py" ];` with `if [[ -f "$SCRIPT_DIR/init_installation_date.py" ]];`.
-
----
-
-## Set 16: Docker Supply Chain Hardening & Binary Wheel Enforcement in `Dockerfile`
-
-### Vulnerability Summary
-- **Classification:** CWE-829 (Inclusion of Functionality from Untrusted Control Sphere), CWE-494 (Download of Code Without Integrity Check), SonarQube docker:S6586, docker:S6587, Hadolint DL3013.
-- **Location:** `Dockerfile` (Line 18) and `requirements.txt`.
-- **Issues Addressed:**
-  1. **Build-Time Arbitrary Code Execution via Setup Scripts:** Installing Python packages from source distributions (sdists) executes untrusted `setup.py` scripts with root privileges inside the container during build.
-  2. **Unpinned Dependency Ranges:** Loose version constraints (`>=`) risk breaking builds and open vectors for malicious dependency updates (supply chain compromise).
-
----
-
-### Numbered Findings & Fixes
-
-1. **Finding 1 (Line 18) — Enforce Binary Wheels (`--only-binary :all:`):**
-   - **Issue:** Without `--only-binary :all:`, pip can fallback to downloading source distributions and executing arbitrary Python code in `setup.py` at Docker build time.
-   - **Fix:** Updated the pip installation step in `Dockerfile` to:
-     `RUN pip install --no-cache-dir --only-binary :all: -r requirements.txt`
-     guaranteeing that pip only installs pre-compiled binary `.whl` packages without running setup scripts.
-
-2. **Finding 2 (Line 18 / `requirements.txt`) — Dependency Version Pinning:**
-   - **Issue:** Using unpinned minimum versions (`>=`) allowed non-deterministic dependency resolution.
-   - **Fix:** Pinned all resolved package versions to exact releases in `requirements.txt` (`fastapi==0.110.0`, `uvicorn[standard]==0.28.0`, `requests==2.31.0`, `httpx==0.27.0`, `websockets==12.0`, `faster-whisper==1.0.0`, `vosk==0.3.45`, `python-multipart==0.0.9`, `jinja2==3.1.3`, `imageio-ffmpeg==0.4.9`, `aiofiles==23.2.1`), guaranteeing reproducible and secure builds.
----
-
-## Sets 17-21: Filesystem Oracle Remediation in `main.export_book_snippets()`
-
-### Vulnerability Summary
-- **Classification:** CWE-209 (Information Exposure via Error Messages / Filesystem Oracle), CWE-200 (Exposure of Sensitive Information), CWE-22 (Path Traversal), CWE-20 (Improper Input Validation).
-- **Location:** `main.py` - `export_book_snippets()` (`/api/export-book`, `/api/user/bookmarks/export-book`, `/api/snippets/export-book`, `/api/book/export`).
-- **Nature of Vulnerability (Filesystem Oracle):**
-  When untrusted input (`book_title: str = Query(...)`) was directly concatenated into filesystem paths (`cand1`, `cand2`) and tested against the operating system via `os.path.isdir()`, `os.path.realpath()`, `os.listdir()`, and `os.path.isfile()`, an attacker could submit probed directory or file names and observe differences in HTTP status codes, exceptions, or response timings. This transformed the export endpoint into a side-channel "Filesystem Oracle", allowing remote enumeration of host directory structures even if file reads were blocked.
-
----
-
-### Numbered Findings and Fixes Across Sets 17-21
-
-1. **Set 17 - Probing SINK on `cand2` / `cand1` (Items 1-4, Lines 3451 & 3511-3512)**
-   - **Taint Flow:** HTTP Query `book_title` (Source) -> concatenated into candidate path `cand2` / `cand1` -> tested via `os.path.isdir()` / `os.path.exists()` (SINK).
-   - **Fix:**
-     - Created `validate_and_sanitize_export_book_title(raw_title: Optional[str]) -> str` with strict bounds (1-200 characters), character whitelist regex (`^[a-zA-Z0-9_\- .',!:?()\[\]]+$`), and explicit rejection of path separators (`/`, `\`, `\0`, `..`, control characters).
-     - Completely eliminated `cand1` and `cand2` direct path concatenation expressions. User input is never joined with server roots to construct query paths.
-
-2. **Set 18 - Directory Existence Probing on `book_dir_path` (Item 5, Line 3547)**
-   - **Taint Flow:** Untrusted `book_title` -> assigned to `book_dir_path` -> probed via `os.path.isdir(book_dir_path)` (SINK).
-   - **Fix:** Decoupled book directory resolution from user input. Book directories are now discovered strictly by server-side enumeration (`os.listdir(real_p)`):
-     - Every candidate directory originates 100% from trusted server filesystem metadata (`os.listdir(real_p)`).
-     - The sanitized user input is used only for string comparison (`clean_entry == target_clean`), never as a filesystem path argument.
-     - `book_dir_path` is assigned exclusively from the matching entry found in the enumerated list, completely cutting off the taint flow to `os.path.isdir()`.
-
-3. **Set 19 - Directory Canonicalization on `book_dir_path` (Item 5, Line 3551)**
-   - **Taint Flow:** Untrusted `book_title` -> `book_dir_path` -> canonicalized via `os.path.realpath(book_dir_path)` (SINK).
-   - **Fix:** Because `book_dir_path` is derived from enumerated subdirectories within `real_p`, it is pre-canonicalized and verified with `os.path.commonpath([real_p, entry_candidate]) == real_p` before selection, ensuring that `os.path.realpath()` only ever processes verified internal entries.
-
-4. **Set 20 - Directory Enumeration on `real_book_dir` (Item 5, Line 3576)**
-   - **Taint Flow:** Untrusted `book_title` -> `book_dir_path` -> `real_book_dir` -> passed to `os.listdir(real_book_dir)` (SINK).
-   - **Fix:** With `real_book_dir` assigned exclusively from the safe directory enumeration whitelist (and confirmed inside `candidate_roots`), `os.listdir(real_book_dir)` is isolated from user-controlled paths.
-
-5. **Set 21 - File Status Inspection on `fpath` (Items 5-7, Line 3577)**
-   - **Taint Flow:** `real_book_dir` -> joined with child name into `fpath` -> inspected via `os.path.isfile(fpath)` (SINK).
-   - **Fix:** Every child filename is constrained with `os.path.basename()`, verified with `os.path.commonpath([real_book_dir, fpath]) == real_book_dir`, and checked with `not os.path.islink(fpath)` before archiving or async file reading.
----
-
-## Set 22: API Path Traversal & Unsanitized Upstream Request Remediation in `main.delete_user_bookmark()`
-
-### Vulnerability Summary
-- **Classification:** CWE-22 (Improper Limitation of a Pathname to a Restricted Directory / API Route Traversal), CWE-918 (Server-Side Request Forgery / Upstream Injection), CWE-20 (Improper Input Validation).
-- **Location:** `main.py` - `delete_user_bookmark()` (`/api/user/bookmarks/{snippet_id:path}`, `/api/snippets/{snippet_id:path}`).
-- **Taint Flow:** HTTP Request Query parameter `request.query_params.get("library_item_id")` (Source, Items 1-5) -> assigned to `req_lib_id` -> propagated to `final_lib_id` (Items 6-7) -> concatenated into upstream URL `abs_del_url = f"{server_url}/api/me/bookmark/{final_lib_id}/{int(final_time)}"` -> dispatched via HTTP client `client.delete(abs_del_url)` (SINK, Items 8-11).
-- **Impact:** An attacker supplying directory traversal sequences (such as `../../`) or URL-encoded path segments in the `library_item_id` query parameter could manipulate the upstream URL path, triggering unintended deletions across arbitrary API endpoints on the Audiobookshelf server (API Traversal / SSRF).
-
----
-
-### Numbered Findings and Fixes
-
-1. **Findings 1-5 (Lines 3606-3624 in original `main.py` / `query_params` Extraction)**
-   - **Issue:** `req_lib_id = request.query_params.get("library_item_id")` accepted arbitrary untrusted string values without sanitization.
-   - **Fix:** Implemented `validate_and_sanitize_library_item_id(lib_id: Optional[Any]) -> Optional[str]`:
-     - Strictly validates input against length bounds (1-128 characters).
-     - Prohibits path separators (`/`, `\`), traversal sequences (`..`), URL encoding characters (`%`), null bytes (`\0`), and query/hash characters (`?`, `#`, `&`).
-     - Enforces a strict character whitelist regex `^[A-Za-z0-9_\-]+$` matching standard Audiobookshelf item UUIDs and identifiers.
-     - Confirms `os.path.basename(clean) == clean`.
-     - Also sanitized `req_book_title`, `req_created_at`, and `req_timestamp` against null bytes, HTML, and traversal characters.
-
-2. **Findings 6-7 (Line 3730 in original `main.py` / `final_lib_id` Assignment)**
-   - **Issue:** `final_lib_id = req_lib_id or found_metadata.get("library_item_id")` combined query parameter and file metadata without defensive boundary verification.
-   - **Fix:** Both `req_lib_id` and `found_metadata.get("library_item_id")` are filtered through `validate_and_sanitize_library_item_id()`, ensuring `final_lib_id` is guaranteed to be clean or `None`.
-
-3. **Findings 8-11 (Lines 3765-3766 in original `main.py` / URL Concatenation & Invocations SINK)**
-   - **Issue:** Direct string interpolation `f"{server_url}/api/me/bookmark/{final_lib_id}/{int(final_time)}"` into `abs_del_url` was passed to the HTTP deletion SINK.
-   - **Fix:**
-     - Applied defensive re-validation `safe_lib_id = validate_and_sanitize_library_item_id(final_lib_id)`.
-     - Validated that `final_time` is a safe non-negative integer (`0 <= clean_time_int <= 100000000`).
-     - Strictly URL-encoded `safe_lib_id` with `quote(safe_lib_id, safe="")`, ensuring that even if unexpected characters were present they cannot escape the path segment.
-     - Parsed the constructed URL with `urlsplit(abs_del_url)` and verified that `parsed_url.path.startswith(f"/api/me/bookmark/{quoted_lib_id}/")` and contains no `..` tokens before dispatching `await client.delete()`.
-
----
-
-## Sets 23-25: Filesystem Oracle Remediation in `main.serve_bookmark_file()`
-
-### Vulnerability Summary
-- **Classification:** CWE-209 (Information Exposure via Error Messages / Filesystem Oracle), CWE-200 (Exposure of Sensitive Information), CWE-22 (Improper Limitation of a Pathname to a Restricted Directory / Path Traversal), CWE-20 (Improper Input Validation).
-- **Location:** `main.py` — `serve_bookmark_file()` (`/bookmarks/{username}/{book_title}/{filename}`, `/snippets/{username}/{book_title}/{filename}`).
-- **Nature of Vulnerability (Filesystem Oracle):**
-  When HTTP request path parameters (`filename`, `username`, `book_title`) were received, `filename` was processed with `safe_filename = os.path.basename(filename)`. Despite taking the basename, `safe_filename` remained tainted user input. It was then concatenated into filesystem query paths (`p = os.path.join(...)`) and probed against the local filesystem using `os.path.isfile(p)` across three distinct code branches:
-  1. **Set 23 (Original Lines 3807-3808):** Primary bookmarks branch `os.path.join(root, u, "bookmarks", safe_book_title, safe_filename)` -> `os.path.isfile(p)`.
-  2. **Set 24 (Original Lines 3819-3820):** Direct user branch `os.path.join(root, u, safe_book_title, safe_filename)` -> `os.path.isfile(p)`.
-  3. **Set 25 (Original Lines 3827-3828):** Snippets fallback branch `os.path.join(root, "snippets", u, safe_book_title, safe_filename)` -> `os.path.isfile(p)`.
-  An attacker could craft HTTP requests with arbitrary candidate filenames or probe names to observe whether files exist on the host filesystem via differences in HTTP 200 vs 404 responses or response timings, creating a side-channel Filesystem Oracle.
-
----
-
-### Numbered Findings and Fixes Across Sets 23-25
-
-1. **Set 23: Primary Bookmarks Branch Probing SINK (Items 1-6, Original Lines 3783, 3791, 3807-3808)**
-   - **Taint Flow:** HTTP Request parameter `filename` (Source) -> assigned to `safe_filename` via `os.path.basename()` -> joined into `p = os.path.join(root, u, "bookmarks", safe_book_title, safe_filename)` -> tested via `os.path.isfile(p)` (SINK).
-   - **Fix:**
-     - Created `validate_and_sanitize_serve_filename(raw_filename: Optional[str]) -> str` with strict bounds (1-255 chars), rejection of path separators (`/`, `\`, null bytes, control chars), directory navigation tokens (`..`), leading dots, and enforcement of a strict whitelist regex `^[a-zA-Z0-9_\- .',!:?()\[\]]+\.(mp3|md|json|txt)$`.
-     - Created `validate_and_sanitize_serve_username(raw_username: Optional[str]) -> str` enforcing length bounds, separator rejection, and whitelist regex `^[a-zA-Z0-9_\- .@]+$`.
-     - Validated `book_title` using `validate_and_sanitize_export_book_title()`.
-     - Completely eliminated path concatenation expression `p = os.path.join(root, u, "bookmarks", safe_book_title, safe_filename)`. User input is never joined with server roots to construct query paths or probe the filesystem.
-     - Book directories and files are discovered strictly via server-side directory enumeration (`os.listdir()`). Candidate files are enumerated from verified folders, canonicalized with `os.path.realpath()`, verified with `os.path.commonpath()`, and compared against `target_filename` strictly as an in-memory string comparison (`clean_f_entry.lower() == target_filename.lower()`). The tainted variable `p` and direct SINK call are 100% eliminated.
-
-2. **Set 24: Direct Book Folder Branch Probing SINK (Items 1-6, Original Lines 3783, 3791, 3819-3820)**
-   - **Taint Flow:** HTTP Request parameter `filename` (Source) -> assigned to `safe_filename` -> joined into `p = os.path.join(root, u, safe_book_title, safe_filename)` -> tested via `os.path.isfile(p)` (SINK).
-   - **Fix:**
-     - Completely eliminated `p = os.path.join(root, u, safe_book_title, safe_filename)` and the corresponding `os.path.isfile(p)` call.
-     - Direct book folder structures are now discovered and verified through the unified server-side enumeration loop over candidate parent directories, ensuring that all candidate paths originate 100% from trusted directory listings rather than user input.
-
-3. **Set 25: Snippets Fallback Branch Probing SINK (Items 1-6, Original Lines 3783, 3791, 3827-3828)**
-   - **Taint Flow:** HTTP Request parameter `filename` (Source) -> assigned to `safe_filename` -> joined into `p = os.path.join(root, "snippets", u, safe_book_title, safe_filename)` -> tested via `os.path.isfile(p)` (SINK).
-   - **Fix:**
-     - Completely eliminated `p = os.path.join(root, "snippets", u, safe_book_title, safe_filename)` and the corresponding `os.path.isfile(p)` call.
-     - The snippets candidate root is incorporated into the safe directory enumeration set, and matched files are returned via `FileResponse` using exclusively the verified server-enumerated path (`matched_file_path`) and clean filename (`matched_filename`).

@@ -82,9 +82,9 @@ if [[ -f "$SCRIPT_DIR/.env" ]]; then
     sed -i '/^NODE_ENV=/d' "$SCRIPT_DIR/.env" 2>/dev/null || true
 fi
 if command -v npm &>/dev/null; then
-    npm install
+    npm install --ignore-scripts
     npm run build
-    echo -e "   ${GREEN}✓ Frontend and server built successfully (dist/server.cjs ready).${NC}"
+    echo -e "   ${GREEN}✓ Frontend and server built successfully (dist/server ready).${NC}"
 else
     echo -e "   ${YELLOW}npm not found. Skipping web build step.${NC}"
 fi

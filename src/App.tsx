@@ -7,31 +7,61 @@ import { AbsUser, AbsActiveSession, Snippet, SyncState } from './types';
 import { wipeSessionKey } from './lib/crypto';
 import { authenticateAbs, fetchActiveSession, formatAuthors } from './lib/absClient';
 import { getStoredCredentials, saveStoredCredentials, clearStoredCredentials, sanitizeStoredUrl } from './lib/authStorage';
-import { safeSidecarFetch } from './lib/safeFetch';
+import { safeSidecarFetch, stripTrailingSlash } from './lib/safeFetch';
 import { CheckCircle2, X, Bell } from 'lucide-react';
 
 // Helper to determine initial default sidecar URL
 function getDefaultSidecarUrl(): string {
   if (typeof window !== 'undefined' && window.location) {
+    const protocol = window.location.protocol;
     const host = window.location.hostname;
     if (host && host !== 'localhost' && host !== '127.0.0.1' && !host.includes('run.app') && !host.includes('webcontainer')) {
-      return `http://${host}:13380`;
+      return `${protocol}//${host}:13380`;
     }
   }
-  return 'http://localhost:13380';
+  return '';
 }
 
-/**
- * Safely constructs an API endpoint URL from a base URL and an endpoint path.
- * Enforces strictly relative same-origin paths, preventing CSRF / SSRF / arbitrary redirection (CWE-918).
- */
-export function buildSafeEndpoint(baseUrl: string, endpointPath: string): string {
-  const cleanPath = endpointPath.startsWith('/') ? endpointPath : `/${endpointPath}`;
-  if (cleanPath.includes('..') || cleanPath.includes('\\') || cleanPath.startsWith('//')) {
-    return '/api/user/bookmarks';
+function stripHtmlChars(str: string): string {
+  let res = '';
+  for (let i = 0; i < str.length; i++) {
+    const ch = str[i];
+    if (ch !== '<' && ch !== '>' && ch !== '"' && ch !== "'") {
+      res += ch;
+    }
   }
-  // Guarantee relative same-origin path to prevent Client-Side Request Forgery
-  return cleanPath;
+  return res;
+}
+
+function cleanStringField(val: unknown, maxLen: number): string | null {
+  if (typeof val !== 'string') return null;
+  return stripHtmlChars(val.slice(0, maxLen));
+}
+
+function cleanFiniteNumber(val: unknown): number {
+  return typeof val === 'number' && Number.isFinite(val) ? val : 0;
+}
+
+function isSafeDateChar(c: number): boolean {
+  if (c >= 48 && c <= 57) return true;
+  return c === 84 || c === 58 || c === 46 || c === 45;
+}
+
+function isValidDateString(val: unknown): val is string {
+  if (typeof val !== 'string' || !val || val.length > 50) return false;
+  for (let i = 0; i < val.length; i++) {
+    if (!isSafeDateChar(val.charCodeAt(i))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function cleanDateField(val: unknown): string | undefined {
+  if (isValidDateString(val)) {
+    return val;
+  }
+  return undefined;
 }
 
 /**
@@ -40,42 +70,391 @@ export function buildSafeEndpoint(baseUrl: string, endpointPath: string): string
  */
 export function sanitizeSyncState(raw: any): SyncState | null {
   if (!raw || typeof raw !== 'object') return null;
+  const allowedModes = ['from_start', 'custom_date', 'from_now'];
   return {
     is_syncing: Boolean(raw.is_syncing),
-    last_synced_at: typeof raw.last_synced_at === 'string' ? raw.last_synced_at.slice(0, 64).replace(/[<>"']/g, '') : null,
-    total_synced: typeof raw.total_synced === 'number' && Number.isFinite(raw.total_synced) ? raw.total_synced : 0,
-    current_item: typeof raw.current_item === 'string' ? raw.current_item.slice(0, 200).replace(/[<>"']/g, '') : null,
-    last_error: typeof raw.last_error === 'string' ? raw.last_error.slice(0, 500).replace(/[<>"']/g, '') : null,
-    installation_date: typeof raw.installation_date === 'string' && /^[0-9T:\-.]+$/.test(raw.installation_date) ? raw.installation_date : undefined,
-    cutoff_datetime: typeof raw.cutoff_datetime === 'string' && /^[0-9T:\-.]+$/.test(raw.cutoff_datetime) ? raw.cutoff_datetime : undefined,
-    cutoff_mode: ['from_start', 'custom_date', 'from_now'].includes(raw.cutoff_mode) ? raw.cutoff_mode : undefined,
-    custom_cutoff_date: typeof raw.custom_cutoff_date === 'string' && /^[0-9T:\-.]+$/.test(raw.custom_cutoff_date) ? raw.custom_cutoff_date : undefined,
-    installed_at: typeof raw.installed_at === 'string' && /^[0-9T:\-.]+$/.test(raw.installed_at) ? raw.installed_at : undefined,
-    skipped_before_cutoff: typeof raw.skipped_before_cutoff === 'number' && Number.isFinite(raw.skipped_before_cutoff) ? raw.skipped_before_cutoff : 0,
-    skipped_tombstoned: typeof raw.skipped_tombstoned === 'number' && Number.isFinite(raw.skipped_tombstoned) ? raw.skipped_tombstoned : 0,
+    last_synced_at: cleanStringField(raw.last_synced_at, 64),
+    total_synced: cleanFiniteNumber(raw.total_synced),
+    current_item: cleanStringField(raw.current_item, 200),
+    last_error: cleanStringField(raw.last_error, 500),
+    installation_date: cleanDateField(raw.installation_date),
+    cutoff_datetime: cleanDateField(raw.cutoff_datetime),
+    cutoff_mode: allowedModes.includes(raw.cutoff_mode) ? raw.cutoff_mode : undefined,
+    custom_cutoff_date: cleanDateField(raw.custom_cutoff_date),
+    installed_at: cleanDateField(raw.installed_at),
+    skipped_before_cutoff: cleanFiniteNumber(raw.skipped_before_cutoff),
+    skipped_tombstoned: cleanFiniteNumber(raw.skipped_tombstoned),
   };
+}
+
+function rewriteLocalhostUrlForExternalClient(rawUrl: string): string {
+  if (typeof window === 'undefined' || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+    return rawUrl;
+  }
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') {
+      return `${parsed.pathname}${parsed.search}`;
+    }
+  } catch {}
+  return rawUrl;
 }
 
 // Resolves audio URL so that clients accessing externally or through a domain
 // stream audio seamlessly via the dashboard server proxy instead of failing on client localhost
-export function getPlayableAudioUrl(rawUrl?: string, targetSidecar?: string, proxyEnabled: boolean = true): string {
+export function getPlayableAudioUrl(rawUrl?: string): string {
   if (!rawUrl) return '';
-  if (rawUrl.startsWith('http://') || rawUrl.startsWith('https://')) {
-    if (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-      try {
-        const parsed = new URL(rawUrl);
-        if (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') {
-          return `${parsed.pathname}${parsed.search}`;
-        }
-      } catch {}
+  const lowerUrl = rawUrl.toLowerCase();
+  if (lowerUrl.startsWith('http://') || lowerUrl.startsWith('https://')) {
+    return rewriteLocalhostUrlForExternalClient(rawUrl);
+  }
+  return rawUrl.startsWith('/') ? rawUrl : `/${rawUrl}`;
+}
+
+interface StatusFetchParams {
+  activeToken: string;
+  serverUrl: string;
+  sidecarUrl: string;
+  useProxy: boolean;
+}
+
+async function fetchBookmarkStatus(params: StatusFetchParams): Promise<any> {
+  try {
+    const res = await safeSidecarFetch('/api/user/bookmarks/status', {
+      method: 'GET',
+      token: params.activeToken,
+      serverUrl: params.serverUrl,
+      sidecarUrl: params.sidecarUrl,
+      useProxy: params.useProxy,
+    });
+    if (!res.ok) return null;
+    const json = await res.json();
+    return json?.data || json;
+  } catch {
+    return null;
+  }
+}
+
+interface RecentBookmarkEvent {
+  timestamp?: string;
+  extraction_method?: string;
+  book_title?: string;
+}
+
+function isSafeTimestampChar(c: number): boolean {
+  if (c >= 48 && c <= 57) return true;
+  if (c >= 65 && c <= 90) return true;
+  if (c >= 97 && c <= 122) return true;
+  return c === 95 || c === 45;
+}
+
+function isValidTimestampString(rawTs: unknown): rawTs is string {
+  if (typeof rawTs !== 'string' || !rawTs || rawTs.length > 100) return false;
+  for (let i = 0; i < rawTs.length; i++) {
+    if (!isSafeTimestampChar(rawTs.charCodeAt(i))) {
+      return false;
     }
-    return rawUrl;
   }
-  const cleanPath = rawUrl.startsWith('/') ? rawUrl : `/${rawUrl}`;
-  if (proxyEnabled || !targetSidecar || targetSidecar.includes('localhost') || targetSidecar.includes('127.0.0.1')) {
-    return cleanPath;
+  return true;
+}
+
+function parseRecentEventToast(recentList?: any[]): { id: string; message: string } | null {
+  if (!Array.isArray(recentList) || recentList.length === 0) {
+    return null;
   }
-  return `${targetSidecar.replace(/\/+$/, '')}${cleanPath}`;
+  const latestEvent: RecentBookmarkEvent = recentList[recentList.length - 1];
+  const rawTs = latestEvent?.timestamp;
+  if (!isValidTimestampString(rawTs)) {
+    return null;
+  }
+  const methodLabel = latestEvent.extraction_method === 'intercepted' ? 'mobile bookmark' : 'snippet';
+  const safeBookTitle = typeof latestEvent.book_title === 'string'
+    ? stripHtmlChars(latestEvent.book_title).slice(0, 100)
+    : 'Audiobook';
+
+  return {
+    id: rawTs,
+    message: `New ${methodLabel} ready: "${safeBookTitle}" (${rawTs})`,
+  };
+}
+
+function isValidTimestampDateChars(str: string): boolean {
+  for (let i = 0; i < 15; i++) {
+    const c = str.charCodeAt(i);
+    if (i === 8) {
+      if (c !== 95) return false;
+    } else if (c < 48 || c > 57) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function parseTimestampDate(timestampStr: string): number | null {
+  if (typeof timestampStr !== 'string' || timestampStr.length < 15) return null;
+  if (!isValidTimestampDateChars(timestampStr)) return null;
+  const y = timestampStr.slice(0, 4);
+  const m = timestampStr.slice(4, 6);
+  const d = timestampStr.slice(6, 8);
+  const hr = timestampStr.slice(9, 11);
+  const min = timestampStr.slice(11, 13);
+  const sec = timestampStr.slice(13, 15);
+  const dateObj = new Date(`${y}-${m}-${d}T${hr}:${min}:${sec}`);
+  const t = dateObj.getTime();
+  return Number.isNaN(t) ? null : t;
+}
+
+function parseDateCandidate(raw: unknown): number | null {
+  if (!raw) return null;
+  const str = String(raw);
+  const t = new Date(str).getTime();
+  if (!Number.isNaN(t)) return t;
+  return parseTimestampDate(str);
+}
+
+export function parseBookmarkCreatedAt(b: any): number {
+  if (!b || typeof b !== 'object') return Date.now();
+  const fromCreated = parseDateCandidate(b.created_at);
+  if (fromCreated !== null) return fromCreated;
+  const fromTimestamp = parseDateCandidate(b.timestamp);
+  if (fromTimestamp !== null) return fromTimestamp;
+  return Date.now();
+}
+
+export function mapRawBookmarkToSnippet(
+  b: any,
+  targetSidecar: string,
+  proxyEnabled: boolean,
+  fallbackUsername: string
+): Snippet {
+  return {
+    id: b.id || `b-${b.timestamp}`,
+    bookTitle: b.book_title || 'Unknown Book',
+    author: formatAuthors(b.author, b.authors, b.authorName),
+    chapterName: b.chapter || 'N/A',
+    timestamp: b.timestamp,
+    startTime: b.start_time ?? 0,
+    currentTime: b.current_time ?? 0,
+    libraryItemId: b.library_item_id,
+    duration: b.duration ?? 0,
+    audioUrl: b.audio_url ? getPlayableAudioUrl(b.audio_url) : '',
+    transcript: b.transcript || '',
+    markdownContent: `# ${b.book_title || 'Bookmark'}\n\n${b.transcript || ''}`,
+    createdAt: parseBookmarkCreatedAt(b),
+    username: b.username || fallbackUsername,
+    extractionStatus: b.extraction_status === 'unavailable' ? 'unavailable' : (b.audio_url ? 'success' : 'unavailable')
+  };
+}
+
+export interface InitialConfig {
+  initialServer: string;
+  initialSidecar: string;
+  initialProxy: boolean;
+}
+
+function isAbsPlaceholder(url: string): boolean {
+  return url.includes('abs.example.com') || url.includes('localhost:13378') || url.includes('127.0.0.1:13378');
+}
+
+export function detectServerFromConfig(_cfg: any): string {
+  return '';
+}
+
+export async function fetchInitialServerConfig(defaultSidecar: string): Promise<InitialConfig> {
+  const result: InitialConfig = {
+    initialServer: '',
+    initialSidecar: defaultSidecar,
+    initialProxy: true,
+  };
+
+  try {
+    const res = await fetch('/api/config');
+    const cfg = await res.json();
+    if (cfg?.ok) {
+      if (cfg.sidecarUrl) {
+        const cleanSidecar = sanitizeStoredUrl(cfg.sidecarUrl);
+        if (cleanSidecar) result.initialSidecar = cleanSidecar;
+      }
+      if (cfg.useBackendProxy !== undefined) {
+        result.initialProxy = Boolean(cfg.useBackendProxy);
+      }
+    }
+  } catch (err) {
+    console.warn('Could not load /api/config, falling back to defaults:', err);
+  }
+
+  return result;
+}
+
+export interface AutoConnectTarget {
+  server: string;
+  sidecar: string;
+  proxy: boolean;
+  authMode: 'token' | 'userpass';
+}
+
+export function resolveAutoConnectTarget(
+  saved: NonNullable<ReturnType<typeof getStoredCredentials>>,
+  initialConfig: InitialConfig
+): AutoConnectTarget {
+  const savedServer = saved.serverUrl && !isLocalOrPlaceholder(saved.serverUrl)
+    ? sanitizeStoredUrl(saved.serverUrl)
+    : '';
+
+  const server = savedServer ? sanitizeStoredUrl(savedServer) : '';
+  const sidecar = sanitizeStoredUrl(saved.sidecarUrl || initialConfig.initialSidecar) || initialConfig.initialSidecar;
+  const proxy = saved.useProxy ?? initialConfig.initialProxy;
+  const authMode = saved.token ? 'token' : (saved.authMode ?? 'token');
+
+  return { server, sidecar, proxy, authMode };
+}
+
+interface AutoConnectActions {
+  setDefaultServerUrl: (url: string) => void;
+  setServerUrl: React.Dispatch<React.SetStateAction<string>>;
+  setSidecarUrl: React.Dispatch<React.SetStateAction<string>>;
+  setUseProxy: React.Dispatch<React.SetStateAction<boolean>>;
+  setIsAuthModalOpen: React.Dispatch<React.SetStateAction<boolean>>;
+  setUser: React.Dispatch<React.SetStateAction<AbsUser | null>>;
+  setActiveToken: React.Dispatch<React.SetStateAction<string | null>>;
+  serverUrlRef: React.MutableRefObject<string>;
+  userRef: React.MutableRefObject<AbsUser | null>;
+  loadActiveSession: (server: string, token: string, proxy: boolean) => Promise<void>;
+  syncUserBookmarks: (sidecar: string, token: string, user: string, proxy: boolean) => Promise<void>;
+}
+
+function isLocalOrPlaceholder(url?: string | null): boolean {
+  if (!url || typeof url !== 'string') return true;
+  const trimmed = url.trim().toLowerCase();
+  return (
+    trimmed === '' ||
+    trimmed.includes('localhost:13378') ||
+    trimmed.includes('127.0.0.1:13378') ||
+    trimmed.includes('abs.example.com')
+  );
+}
+
+function sanitizeInitialServer(url?: string | null): string {
+  if (!url || typeof url !== 'string') return '';
+  const trimmed = url.trim();
+  if (isLocalOrPlaceholder(trimmed)) return '';
+  return trimmed;
+}
+
+async function attemptSavedAutoConnect(
+  saved: NonNullable<ReturnType<typeof getStoredCredentials>>,
+  config: InitialConfig,
+  isCancelled: () => boolean,
+  actions: AutoConnectActions
+) {
+  try {
+    const target = resolveAutoConnectTarget(saved, config);
+    if (!target.server) {
+      if (!isCancelled() && !actions.userRef.current) {
+        actions.setIsAuthModalOpen(true);
+      }
+      return;
+    }
+    actions.setServerUrl(target.server);
+    actions.serverUrlRef.current = target.server;
+    actions.setSidecarUrl(target.sidecar);
+    actions.setUseProxy(target.proxy);
+
+    const authResult = await authenticateAbs(
+      target.server,
+      target.authMode,
+      saved.token,
+      saved.username,
+      saved.password,
+      target.proxy
+    );
+
+    if (isCancelled()) return;
+
+    actions.setUser(authResult.user);
+    actions.userRef.current = authResult.user;
+    actions.setActiveToken(authResult.token);
+    actions.setIsAuthModalOpen(false);
+
+    actions.loadActiveSession(target.server, authResult.token, target.proxy);
+    actions.syncUserBookmarks(target.sidecar, authResult.token, authResult.user.username, target.proxy);
+  } catch (autoErr) {
+    console.warn('Auto-reconnect with saved credentials notice:', autoErr);
+    if (!isCancelled() && !actions.userRef.current) {
+      actions.setIsAuthModalOpen(true);
+    }
+  }
+}
+
+function handleUnauthenticatedFallback(
+  config: InitialConfig,
+  isCancelled: () => boolean,
+  actions: AutoConnectActions
+) {
+  if (isCancelled() || actions.userRef.current) return;
+  actions.setServerUrl((prev) => (!prev || isLocalOrPlaceholder(prev) ? config.initialServer : prev));
+  actions.setSidecarUrl((prev) => (prev.includes('[your ip:port') ? config.initialSidecar : prev));
+  actions.setUseProxy(config.initialProxy);
+  actions.setIsAuthModalOpen(true);
+}
+
+async function runAutoConnectStartup(
+  config: InitialConfig,
+  isCancelled: () => boolean,
+  actions: AutoConnectActions
+) {
+  if (config.initialServer) {
+    actions.setDefaultServerUrl(config.initialServer);
+    actions.setServerUrl((prev) => (!prev || isLocalOrPlaceholder(prev) ? config.initialServer : prev));
+    actions.serverUrlRef.current = config.initialServer;
+  }
+
+  if (isCancelled() || actions.userRef.current) return;
+
+  const saved = getStoredCredentials();
+  const hasSavedAuth = Boolean(saved?.token || (saved?.username && saved?.password));
+
+  if (hasSavedAuth && saved) {
+    await attemptSavedAutoConnect(saved, config, isCancelled, actions);
+  } else {
+    handleUnauthenticatedFallback(config, isCancelled, actions);
+  }
+}
+
+async function executeStatusPollingCycle(
+  endpointParams: StatusFetchParams,
+  callbacks: {
+    username: string;
+    isSyncing: boolean;
+    handleSyncStatus: (rawSync: any) => Promise<void>;
+    handleRecentToast: (recentList: any[]) => Promise<void>;
+  }
+): Promise<number> {
+  if (typeof document !== 'undefined' && document.hidden) {
+    return 45000;
+  }
+
+  const statusData = await fetchBookmarkStatus(endpointParams);
+  if (statusData) {
+    await callbacks.handleSyncStatus(statusData.sync_state);
+    await callbacks.handleRecentToast(statusData.recent);
+  }
+
+  return callbacks.isSyncing ? 6000 : 18000;
+}
+
+function buildSnippetDeleteParams(target?: Snippet): string {
+  if (!target) return '';
+  const queryParams = new URLSearchParams();
+  if (target.libraryItemId) queryParams.set('library_item_id', target.libraryItemId);
+  const timeVal = target.currentTime ?? target.startTime;
+  if (typeof timeVal === 'number') queryParams.set('time', String(timeVal));
+  if (typeof target.startTime === 'number') queryParams.set('start_time', String(target.startTime));
+  if (target.bookTitle) queryParams.set('book_title', target.bookTitle);
+  if (target.timestamp) queryParams.set('timestamp', target.timestamp);
+  if (target.createdAt) queryParams.set('created_at', String(target.createdAt));
+  const qs = queryParams.toString();
+  return qs ? `?${qs}` : '';
 }
 
 export function App() {
@@ -84,25 +463,6 @@ export function App() {
   // Connection and Authentication State
   const savedInitial = typeof window !== 'undefined' ? getStoredCredentials() : null;
 
-  const isLocalOrPlaceholder = (url?: string | null) => {
-    if (!url || typeof url !== 'string') return true;
-    const trimmed = url.trim();
-    return (
-      trimmed === '' ||
-      trimmed === 'http://localhost:13378' ||
-      trimmed === 'http://127.0.0.1:13378' ||
-      trimmed === 'https://localhost:13378' ||
-      trimmed.includes('abs.example.com')
-    );
-  };
-
-  const sanitizeInitialServer = (url?: string | null) => {
-    if (!url || typeof url !== 'string') return '';
-    const trimmed = url.trim();
-    if (isLocalOrPlaceholder(trimmed)) return '';
-    return trimmed;
-  };
-
   const [user, setUser] = useState<AbsUser | null>(null);
   const [activeToken, setActiveToken] = useState<string | null>(null);
   const [serverUrl, setServerUrl] = useState<string>(
@@ -110,7 +470,7 @@ export function App() {
   );
   const [defaultServerUrl, setDefaultServerUrl] = useState<string>('');
   const [sidecarUrl, setSidecarUrl] = useState<string>(savedInitial?.sidecarUrl || getDefaultSidecarUrl());
-  const [useProxy, setUseProxy] = useState<boolean>(savedInitial?.useProxy !== undefined ? savedInitial.useProxy : true);
+  const [useProxy, setUseProxy] = useState<boolean>(savedInitial?.useProxy ?? true);
 
   const serverUrlRef = useRef<string>(serverUrl);
   serverUrlRef.current = serverUrl;
@@ -126,7 +486,7 @@ export function App() {
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(() => {
     if (typeof window === 'undefined') return true;
     const saved = getStoredCredentials();
-    return !(saved && (saved.token || (saved.username && saved.password)));
+    return !(saved?.token || (saved?.username && saved?.password));
   });
 
   // Snippets library state
@@ -174,45 +534,9 @@ export function App() {
       }
 
       if (bookmarksList.length > 0) {
-        const sidecarBookmarks: Snippet[] = bookmarksList.map((b: any) => {
-          let parsedDate = Date.now();
-          if (b.created_at) {
-            const t = new Date(b.created_at).getTime();
-            if (!isNaN(t)) {
-              parsedDate = t;
-            } else {
-              const m = String(b.created_at).match(/^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/);
-              if (m) {
-                const d = new Date(`${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}`);
-                if (!isNaN(d.getTime())) parsedDate = d.getTime();
-              }
-            }
-          } else if (b.timestamp) {
-            const m = String(b.timestamp).match(/^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/);
-            if (m) {
-              const d = new Date(`${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}`);
-              if (!isNaN(d.getTime())) parsedDate = d.getTime();
-            }
-          }
-
-          return {
-            id: b.id || `b-${b.timestamp}`,
-            bookTitle: b.book_title || 'Unknown Book',
-            author: formatAuthors(b.author, b.authors, b.authorName),
-            chapterName: b.chapter || 'N/A',
-            timestamp: b.timestamp,
-            startTime: b.start_time ?? 0,
-            currentTime: b.current_time ?? 0,
-            libraryItemId: b.library_item_id,
-            duration: b.duration ?? 0,
-            audioUrl: b.audio_url ? getPlayableAudioUrl(b.audio_url, targetSidecar, proxyEnabled) : '',
-            transcript: b.transcript || '',
-            markdownContent: `# ${b.book_title || 'Bookmark'}\n\n${b.transcript || ''}`,
-            createdAt: parsedDate,
-            username: b.username || username,
-            extractionStatus: b.extraction_status || (b.audio_url ? 'success' : 'unavailable')
-          };
-        });
+        const sidecarBookmarks: Snippet[] = bookmarksList.map((b: any) =>
+          mapRawBookmarkToSnippet(b, targetSidecar, proxyEnabled, username)
+        );
         setSnippets(sidecarBookmarks);
 
         // Update latest known timestamp
@@ -322,90 +646,20 @@ export function App() {
     let isCancelled = false;
 
     const initializeConnection = async () => {
-      let initialServer = '';
-      let initialSidecar = getDefaultSidecarUrl();
-      let initialProxy = true;
-
-      try {
-        const res = await fetch('/api/config');
-        const cfg = await res.json();
-        if (cfg?.ok) {
-          const rawDefault = sanitizeStoredUrl(cfg.defaultAbsUrl);
-          const rawTarget = sanitizeStoredUrl(cfg.absTargetServer);
-          const cfgDefault = rawDefault && !rawDefault.includes('abs.example.com') && !isLocalOrPlaceholder(rawDefault) ? rawDefault : '';
-          const cfgTarget = rawTarget && rawTarget !== 'http://audiobookshelf:80' && !rawTarget.includes('abs.example.com') && !isLocalOrPlaceholder(rawTarget) ? rawTarget : '';
-          const detected = sanitizeStoredUrl(cfgDefault || cfgTarget || (rawDefault && !rawDefault.includes('abs.example.com') ? rawDefault : ''));
-          if (detected) {
-            initialServer = detected;
-            setDefaultServerUrl(detected);
-            setServerUrl((prev) => (!prev || isLocalOrPlaceholder(prev) ? detected : prev));
-            serverUrlRef.current = detected;
-          }
-          if (cfg.sidecarUrl) {
-            const cleanSidecar = sanitizeStoredUrl(cfg.sidecarUrl);
-            if (cleanSidecar) {
-              initialSidecar = cleanSidecar;
-            }
-          }
-          if (cfg.useBackendProxy !== undefined) {
-            initialProxy = Boolean(cfg.useBackendProxy);
-          }
-        }
-      } catch (err) {
-        console.warn('Could not load /api/config, falling back to defaults:', err);
-      }
-
-      if (isCancelled || userRef.current) return;
-
-      // 2. Check if user previously saved credentials on this device
-      const saved = getStoredCredentials();
-      const savedServer = saved?.serverUrl && !isLocalOrPlaceholder(saved.serverUrl) ? sanitizeStoredUrl(saved.serverUrl) : '';
-      if (saved && (saved.token || (saved.username && saved.password))) {
-        try {
-          const targetServerToUse = sanitizeStoredUrl(initialServer || savedServer || '');
-          const targetSidecarToUse = sanitizeStoredUrl(saved.sidecarUrl || initialSidecar) || initialSidecar;
-          const proxyToUse = saved.useProxy !== undefined ? saved.useProxy : initialProxy;
-          const authModeToUse = saved.token ? 'token' : saved.authMode;
-
-          if (targetServerToUse) {
-            setServerUrl(targetServerToUse);
-            serverUrlRef.current = targetServerToUse;
-          }
-          setSidecarUrl(targetSidecarToUse);
-          setUseProxy(proxyToUse);
-
-          const authResult = await authenticateAbs(
-            targetServerToUse,
-            authModeToUse,
-            saved.token,
-            saved.username,
-            saved.password,
-            proxyToUse
-          );
-
-          if (isCancelled) return;
-
-          setUser(authResult.user);
-          userRef.current = authResult.user;
-          setActiveToken(authResult.token);
-          setIsAuthModalOpen(false);
-
-          loadActiveSession(targetServerToUse, authResult.token, proxyToUse);
-          syncUserBookmarks(targetSidecarToUse, authResult.token, authResult.user.username, proxyToUse);
-        } catch (autoErr) {
-          console.warn('Auto-reconnect with saved credentials notice:', autoErr);
-          if (!isCancelled && !userRef.current) {
-            setIsAuthModalOpen(true);
-          }
-        }
-      } else {
-        if (!isCancelled && !userRef.current) {
-          setServerUrl((prev) => (!prev || isLocalOrPlaceholder(prev) ? initialServer : prev));
-          setSidecarUrl((prev) => (prev.includes('[your ip:port') ? initialSidecar : prev));
-          setUseProxy(initialProxy);
-          setIsAuthModalOpen(true);
-        }
-      }
+      const config = await fetchInitialServerConfig(getDefaultSidecarUrl());
+      await runAutoConnectStartup(config, () => isCancelled, {
+        setDefaultServerUrl,
+        setServerUrl,
+        setSidecarUrl,
+        setUseProxy,
+        setIsAuthModalOpen,
+        setUser,
+        setActiveToken,
+        serverUrlRef,
+        userRef,
+        loadActiveSession,
+        syncUserBookmarks,
+      });
     };
 
     initializeConnection();
@@ -414,6 +668,48 @@ export function App() {
       isCancelled = true;
     };
   }, [loadActiveSession, syncUserBookmarks]);
+
+  const handleSyncStatusUpdate = useCallback(async (
+    rawSyncState: any,
+    targetSidecar: string,
+    token: string,
+    username: string,
+    proxy: boolean
+  ) => {
+    if (!rawSyncState) return;
+    const cleanSync = sanitizeSyncState(rawSyncState);
+    if (!cleanSync) return;
+
+    const wasSyncing = syncState?.is_syncing;
+    setSyncState(cleanSync);
+    if (wasSyncing && !cleanSync.is_syncing) {
+      await syncUserBookmarks(targetSidecar, token, username, proxy);
+    }
+  }, [syncState?.is_syncing, syncUserBookmarks]);
+
+  const handleRecentToast = useCallback(async (
+    recentList: any[],
+    targetSidecar: string,
+    token: string,
+    username: string,
+    proxy: boolean
+  ) => {
+    const toast = parseRecentEventToast(recentList);
+    if (!toast || notifiedIdsRef.current.has(toast.id)) return;
+
+    notifiedIdsRef.current.add(toast.id);
+    lastKnownTimestampRef.current = toast.id;
+
+    await syncUserBookmarks(targetSidecar, token, username, proxy);
+
+    setNotification(toast);
+    if (notificationTimeoutRef.current) {
+      clearTimeout(notificationTimeoutRef.current);
+    }
+    notificationTimeoutRef.current = setTimeout(() => {
+      setNotification((curr) => (curr?.id === toast.id ? null : curr));
+    }, 6000);
+  }, [syncUserBookmarks]);
 
   // Automated Real-Time Background Polling:
   // Detects newly completed manual or intercepted bookmarks with adaptive, visibility-aware intervals
@@ -425,82 +721,27 @@ export function App() {
 
     const pollStatus = async () => {
       if (!isSubscribed) return;
-
-      // When browser tab is in background or minimized, throttle polling to 45s to avoid heating CPU/SSD
-      if (typeof document !== 'undefined' && document.hidden) {
-        timerId = setTimeout(pollStatus, 45000);
-        return;
-      }
-
-      try {
-        let statusData: any = null;
-        const res = await safeSidecarFetch('/api/user/bookmarks/status', {
-          method: 'GET',
-          token: activeToken,
+      const delay = await executeStatusPollingCycle(
+        {
+          activeToken,
           serverUrl,
           sidecarUrl,
           useProxy,
-        });
-
-        if (res.ok) {
-          const json = await res.json();
-          statusData = json?.data || json;
+        },
+        {
+          username: user.username,
+          isSyncing: Boolean(syncState?.is_syncing),
+          handleSyncStatus: async (rawSync) => {
+            await handleSyncStatusUpdate(rawSync, sidecarUrl, activeToken, user.username, useProxy);
+          },
+          handleRecentToast: async (recentList) => {
+            await handleRecentToast(recentList, sidecarUrl, activeToken, user.username, useProxy);
+          },
         }
-
-        if (statusData && statusData.sync_state) {
-          const wasSyncing = syncState?.is_syncing;
-          const cleanSync = sanitizeSyncState(statusData.sync_state);
-          if (cleanSync) {
-            setSyncState(cleanSync);
-            // If sync just completed, refresh the snippet list immediately
-            if (wasSyncing && !cleanSync.is_syncing) {
-              await syncUserBookmarks(sidecarUrl, activeToken, user.username, useProxy);
-            }
-          }
-        }
-
-        if (statusData && Array.isArray(statusData.recent) && statusData.recent.length > 0) {
-          const latestEvent = statusData.recent[statusData.recent.length - 1];
-          const rawTs = latestEvent?.timestamp;
-          const eventId = typeof rawTs === 'string' && /^[a-zA-Z0-9_\-]+$/.test(rawTs) ? rawTs : null;
-          if (eventId && !notifiedIdsRef.current.has(eventId)) {
-            // Mark as notified immediately to prevent duplicate triggers
-            notifiedIdsRef.current.add(eventId);
-            lastKnownTimestampRef.current = eventId;
-
-            // Trigger background bookmark refresh
-            await syncUserBookmarks(sidecarUrl, activeToken, user.username, useProxy);
-            
-            // Show toast notification exactly once with sanitized title
-            const methodLabel = latestEvent.extraction_method === 'intercepted' ? 'mobile bookmark' : 'snippet';
-            const safeBookTitle = typeof latestEvent.book_title === 'string'
-              ? latestEvent.book_title.replace(/[<>"']/g, '').slice(0, 100)
-              : 'Audiobook';
-
-            setNotification({
-              id: eventId,
-              message: `New ${methodLabel} ready: "${safeBookTitle}" (${eventId})`,
-            });
-
-            if (notificationTimeoutRef.current) {
-              clearTimeout(notificationTimeoutRef.current);
-            }
-            notificationTimeoutRef.current = setTimeout(() => {
-              setNotification((curr) => (curr?.id === eventId ? null : curr));
-            }, 6000);
-          }
-        }
-      } catch {
-        // Silent catch for background heartbeat
+      );
+      if (isSubscribed) {
+        timerId = setTimeout(pollStatus, delay);
       }
-
-      if (!isSubscribed) return;
-
-      // Adaptive polling delay:
-      // When actively extracting/syncing, poll every 6s for quick feedback;
-      // When idle, poll every 18s (dramatically reduces ABS server load and CPU usage)
-      const nextDelay = (syncState?.is_syncing) ? 6000 : 18000;
-      timerId = setTimeout(pollStatus, nextDelay);
     };
 
     // Initial poll after short delay
@@ -520,7 +761,7 @@ export function App() {
       if (timerId) clearTimeout(timerId);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [activeToken, user, sidecarUrl, serverUrl, useProxy, syncUserBookmarks, syncState?.is_syncing]);
+  }, [activeToken, user, sidecarUrl, serverUrl, useProxy, handleSyncStatusUpdate, handleRecentToast, syncState?.is_syncing]);
 
   // Autonomous / Manual Trigger for Audiobookshelf Background Bookmark Sync
   const handleTriggerSync = useCallback(async () => {
@@ -586,28 +827,18 @@ export function App() {
     const target = snippetToDelete || snippets.find((s) => s.id === id);
     setSnippets((prev) => prev.filter((s) => s.id !== id));
 
-    if (activeToken) {
-      try {
-        const queryParams = new URLSearchParams();
-        if (target?.libraryItemId) queryParams.set('library_item_id', target.libraryItemId);
-        if (typeof target?.currentTime === 'number') queryParams.set('time', String(target.currentTime));
-        else if (typeof target?.startTime === 'number') queryParams.set('time', String(target.startTime));
-        if (typeof target?.startTime === 'number') queryParams.set('start_time', String(target.startTime));
-        if (target?.bookTitle) queryParams.set('book_title', target.bookTitle);
-        if (target?.timestamp) queryParams.set('timestamp', target.timestamp);
-        if (target?.createdAt) queryParams.set('created_at', String(target.createdAt));
-
-        const qs = queryParams.toString() ? `?${queryParams.toString()}` : '';
-        await safeSidecarFetch(`/api/user/bookmarks/${encodeURIComponent(id)}${qs}`, {
-          method: 'DELETE',
-          token: activeToken,
-          serverUrl,
-          sidecarUrl,
-          useProxy,
-        });
-      } catch (err) {
-        console.warn('Notice deleting bookmark from disk:', err);
-      }
+    if (!activeToken) return;
+    try {
+      const qs = buildSnippetDeleteParams(target);
+      await safeSidecarFetch(`/api/user/bookmarks/${encodeURIComponent(id)}${qs}`, {
+        method: 'DELETE',
+        token: activeToken,
+        serverUrl,
+        sidecarUrl,
+        useProxy,
+      });
+    } catch (err) {
+      console.warn('Notice deleting bookmark from disk:', err);
     }
   };
 

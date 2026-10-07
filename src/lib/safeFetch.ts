@@ -39,6 +39,91 @@ export function sanitizeApiPath(path: string): string {
   return trimmed.replace(/[\x00-\x1F\x7F<>"'{}|^`]/g, '');
 }
 
+export function stripTrailingSlash(url: string): string {
+  let end = url.length;
+  while (end > 0 && url.charCodeAt(end - 1) === 47 /* '/' */) {
+    end--;
+  }
+  return url.slice(0, end);
+}
+
+function buildForwardHeaders(options: SafeRequestOptions): Record<string, string> {
+  const headers: Record<string, string> = { ...options.headers };
+  if (options.token) {
+    headers['Authorization'] = `Bearer ${options.token}`;
+  }
+  if (options.serverUrl) {
+    headers['X-ABS-Server-Url'] = options.serverUrl;
+  }
+  return headers;
+}
+
+function parseResponseBody(rawText: string): any {
+  try {
+    return JSON.parse(rawText);
+  } catch {
+    return rawText;
+  }
+}
+
+async function dispatchViaProxy(
+  cleanSidecar: string,
+  safePath: string,
+  method: string,
+  headers: Record<string, string>,
+  body: any
+): Promise<SafeApiResponse> {
+  const targetUrl = `${stripTrailingSlash(cleanSidecar)}${safePath}`;
+  const proxyRes = await fetch('/api/proxy/abs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ targetUrl, method, headers, body }),
+  });
+
+  const text = await proxyRes.text();
+  const parsed = parseResponseBody(text);
+  const json = typeof parsed === 'object' && parsed !== null ? parsed : { message: text };
+
+  const isOk = proxyRes.ok && json.ok !== false && (!json.status || json.status < 400);
+  const innerData = json.data !== undefined ? json.data : json;
+
+  return {
+    ok: isOk,
+    status: json.status || proxyRes.status,
+    data: innerData,
+    json: async () => innerData,
+    text: async () => (typeof innerData === 'string' ? innerData : JSON.stringify(innerData)),
+  };
+}
+
+async function dispatchSameOrigin(
+  safePath: string,
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH',
+  headers: Record<string, string>,
+  body: any
+): Promise<SafeApiResponse> {
+  const reqInit: RequestInit = { method, headers };
+
+  if (body !== undefined && body !== null && method !== 'GET') {
+    reqInit.body = typeof body === 'string' ? body : JSON.stringify(body);
+    if (!headers['Content-Type'] && !headers['content-type']) {
+      headers['Content-Type'] = 'application/json';
+    }
+  }
+
+  const res = await fetch(safePath, reqInit);
+  const rawText = await res.text();
+  const parsedData = parseResponseBody(rawText);
+
+  return {
+    ok: res.ok,
+    status: res.status,
+    data: parsedData,
+    json: async () => parsedData,
+    text: async () => rawText,
+  };
+}
+
 /**
  * Dispatches an API request safely without exposing the browser to Client-Side Request Forgery (CWE-918),
  * DOM-based storage injection, or bearer token exfiltration.
@@ -55,14 +140,7 @@ export async function safeSidecarFetch(
 ): Promise<SafeApiResponse> {
   const safePath = sanitizeApiPath(apiPath);
   const method = (options.method || 'GET').toUpperCase() as 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
-
-  const forwardHeaders: Record<string, string> = { ...(options.headers || {}) };
-  if (options.token) {
-    forwardHeaders['Authorization'] = `Bearer ${options.token}`;
-  }
-  if (options.serverUrl) {
-    forwardHeaders['X-ABS-Server-Url'] = options.serverUrl;
-  }
+  const forwardHeaders = buildForwardHeaders(options);
 
   const useProxy = options.useProxy !== false;
   const cleanSidecar = options.sidecarUrl ? sanitizeStoredUrl(options.sidecarUrl) : '';
@@ -77,74 +155,9 @@ export async function safeSidecarFetch(
 
   // If proxy is enabled and target is remote, dispatch through server-side proxy
   if (useProxy && isTargetRemote) {
-    const targetUrl = `${cleanSidecar.replace(/\/+$/, '')}${safePath}`;
-    const proxyRes = await fetch('/api/proxy/abs', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        targetUrl,
-        method,
-        headers: forwardHeaders,
-        body: options.body,
-      }),
-    });
-
-    let json: any = null;
-    let text = '';
-    try {
-      text = await proxyRes.text();
-      json = JSON.parse(text);
-    } catch {
-      json = { message: text };
-    }
-
-    const isOk = proxyRes.ok && (json?.ok !== false) && (json?.status ? json.status < 400 : true);
-    const innerData = json?.data !== undefined ? json.data : json;
-
-    return {
-      ok: isOk,
-      status: json?.status || proxyRes.status,
-      data: innerData,
-      json: async () => innerData,
-      text: async () => (typeof innerData === 'string' ? innerData : JSON.stringify(innerData)),
-    };
+    return dispatchViaProxy(cleanSidecar, safePath, method, forwardHeaders, options.body);
   }
 
   // Otherwise, invoke same-origin relative endpoint directly:
-  const reqInit: RequestInit = {
-    method,
-    headers: forwardHeaders,
-  };
-
-  if (options.body !== undefined && options.body !== null && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
-    if (typeof options.body === 'string') {
-      reqInit.body = options.body;
-      if (!forwardHeaders['Content-Type'] && !forwardHeaders['content-type']) {
-        forwardHeaders['Content-Type'] = 'application/json';
-      }
-    } else {
-      reqInit.body = JSON.stringify(options.body);
-      if (!forwardHeaders['Content-Type'] && !forwardHeaders['content-type']) {
-        forwardHeaders['Content-Type'] = 'application/json';
-      }
-    }
-  }
-
-  const res = await fetch(safePath, reqInit);
-  let parsedData: any = null;
-  let rawText = '';
-  try {
-    rawText = await res.text();
-    parsedData = JSON.parse(rawText);
-  } catch {
-    parsedData = rawText;
-  }
-
-  return {
-    ok: res.ok,
-    status: res.status,
-    data: parsedData,
-    json: async () => parsedData,
-    text: async () => rawText,
-  };
+  return dispatchSameOrigin(safePath, method, forwardHeaders, options.body);
 }

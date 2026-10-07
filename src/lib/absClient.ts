@@ -1,5 +1,6 @@
 import { AbsActiveSession, AbsUser, Snippet } from '../types';
 import { sanitizeStoredUrl } from './authStorage';
+import { stripTrailingSlash } from './safeFetch';
 
 export interface AbsAuthResult {
   token: string;
@@ -26,55 +27,77 @@ function normalizeServerUrl(url: string): string {
  * - Single object: { name: "Author Name" }
  * - authorName or displayAuthor strings
  */
+function extractAuthorNameFromItem(item: unknown): string {
+  if (typeof item === 'string') return item.trim();
+  if (item && typeof item === 'object') {
+    const obj = item as Record<string, unknown>;
+    const n = obj.name ?? obj.author ?? obj.displayName ?? obj.authorName;
+    if (typeof n === 'string') return n.trim();
+  }
+  return '';
+}
+
+function extractAuthorsFromArray(authors: unknown[]): string | null {
+  const names: string[] = [];
+  for (const a of authors) {
+    const n = extractAuthorNameFromItem(a);
+    if (n) names.push(n);
+  }
+  return names.length > 0 ? names.join(', ') : null;
+}
+
+function extractSingleAuthor(val: unknown): string | null {
+  if (typeof val === 'string') {
+    const trimmed = val.trim();
+    if (trimmed) return trimmed;
+  }
+  if (val && typeof val === 'object') {
+    const n = extractAuthorNameFromItem(val);
+    if (n) return n;
+  }
+  return null;
+}
+
 export function formatAuthors(
   authors: unknown,
   fallbackAuthor?: unknown,
   fallbackAuthorName?: unknown,
   displayAuthor?: unknown
 ): string {
-  if (Array.isArray(authors) && authors.length > 0) {
-    const names = authors
-      .map((a: unknown) => {
-        if (typeof a === 'string') return a.trim();
-        if (a && typeof a === 'object' && a !== null) {
-          const obj = a as Record<string, unknown>;
-          const n = obj.name || obj.author || obj.displayName || obj.authorName;
-          if (typeof n === 'string') return n.trim();
-        }
-        return '';
-      })
-      .filter(Boolean);
-    if (names.length > 0) {
-      return names.join(', ');
-    }
+  if (Array.isArray(authors)) {
+    const parsed = extractAuthorsFromArray(authors);
+    if (parsed) return parsed;
   }
 
-  if (typeof authors === 'string' && authors.trim()) {
-    return authors.trim();
-  }
+  const primary = extractSingleAuthor(authors);
+  if (primary) return primary;
 
-  if (authors && typeof authors === 'object' && authors !== null) {
-    const obj = authors as Record<string, unknown>;
-    const n = obj.name || obj.author || obj.displayName || obj.authorName;
-    if (typeof n === 'string' && n.trim()) return n.trim();
-  }
+  const fbName = extractSingleAuthor(fallbackAuthorName);
+  if (fbName) return fbName;
 
-  if (typeof fallbackAuthorName === 'string' && fallbackAuthorName.trim()) {
-    return fallbackAuthorName.trim();
-  }
-  if (typeof fallbackAuthor === 'string' && fallbackAuthor.trim()) {
-    return fallbackAuthor.trim();
-  }
-  if (fallbackAuthor && typeof fallbackAuthor === 'object' && fallbackAuthor !== null) {
-    const obj = fallbackAuthor as Record<string, unknown>;
-    const n = obj.name || obj.author || obj.displayName;
-    if (typeof n === 'string' && n.trim()) return n.trim();
-  }
-  if (typeof displayAuthor === 'string' && displayAuthor.trim()) {
-    return displayAuthor.trim();
-  }
+  const fb = extractSingleAuthor(fallbackAuthor);
+  if (fb) return fb;
+
+  const display = extractSingleAuthor(displayAuthor);
+  if (display) return display;
 
   return 'Unknown Author';
+}
+
+function sanitizeAbsTargetUrl(url: string): string {
+  const sanitized = sanitizeStoredUrl(url);
+  if (!sanitized) {
+    throw new Error('Security violation: untrusted or invalid target URL');
+  }
+  const parsed = new URL(sanitized);
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error('Security violation: only HTTP and HTTPS protocols are allowed');
+  }
+  const h = parsed.hostname.toLowerCase();
+  if (h.startsWith('169.254.') || h === 'metadata.google.internal' || h === 'metadata' || h === 'instance-data') {
+    throw new Error('Security violation: metadata endpoints are forbidden');
+  }
+  return parsed.toString();
 }
 
 /**
@@ -89,36 +112,17 @@ async function absFetch(
     headers?: Record<string, string>;
     body?: any;
   } = {},
-  useProxy: boolean = true
+  _useProxy: boolean = true
 ): Promise<{ ok: boolean; status: number; data: any }> {
-  let cleanTarget = targetUrl.trim();
-  if (!cleanTarget.startsWith('http://') && !cleanTarget.startsWith('https://')) {
-    cleanTarget = `https://${cleanTarget}`;
-  }
+  const safeTargetUrl = sanitizeAbsTargetUrl(targetUrl);
 
-  const parsed = new URL(cleanTarget);
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new Error('Invalid URL protocol: only http and https are permitted');
-  }
-  if (
-    parsed.hostname === '169.254.169.254' ||
-    parsed.hostname.startsWith('169.254.') ||
-    parsed.hostname === 'metadata.google.internal' ||
-    parsed.hostname === 'metadata'
-  ) {
-    throw new Error('Security violation: metadata endpoints are forbidden.');
-  }
-
-  // Route securely via the trusted backend proxy (/api/proxy/abs).
-  // This completely prevents Client-Side Request Forgery (CWE-918), bypasses browser CORS,
-  // and prevents user tokens from being exposed to direct cross-origin fetches.
   const res = await fetch('/api/proxy/abs', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      targetUrl: cleanTarget,
-      method: options.method || 'GET',
-      headers: options.headers || {},
+      targetUrl: safeTargetUrl,
+      method: options.method ?? 'GET',
+      headers: options.headers ?? {},
       body: options.body,
     }),
   });
@@ -132,6 +136,148 @@ async function absFetch(
     ok: json.ok,
     status: json.status,
     data: json.data,
+  };
+}
+
+function stripBearerPrefix(token: string): string {
+  let t = token.trim();
+  if (t.toLowerCase().startsWith('bearer ')) {
+    t = t.slice(7).trim();
+  }
+  let cleaned = '';
+  for (let i = 0; i < t.length; i++) {
+    const ch = t[i];
+    if (ch !== '"' && ch !== "'") {
+      cleaned += ch;
+    }
+  }
+  return cleaned.trim();
+}
+
+function formatAuthErrorMessage(res: { status: number; data: any }, defaultMessage: string): string {
+  if (res.status === 401 || res.status === 403) {
+    return 'Invalid username or password. Please verify your Audiobookshelf credentials.';
+  }
+  if (res.status === 502) {
+    const detail = res.data?.detail || res.data?.message || (typeof res.data === 'string' ? res.data : '');
+    return detail
+      ? `Connection to Audiobookshelf failed (HTTP 502 Bad Gateway): ${detail}. If Audiobookshelf runs in Docker, ensure ABS_TARGET_SERVER in ecosystem.config.cjs points to your Host LAN IP (e.g. http://192.168.68.102:13378) instead of localhost/127.0.0.1.`
+      : `Connection to Audiobookshelf failed (HTTP 502 Bad Gateway): The proxy or sidecar could not reach Audiobookshelf. If Audiobookshelf is running in Docker, ensure ABS_TARGET_SERVER points to your Host LAN IP (e.g. http://192.168.68.102:13378) rather than localhost or your public domain.`;
+  }
+  const errDetail = typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
+  return `${defaultMessage} (HTTP ${res.status}): ${errDetail}`;
+}
+
+async function authenticateWithUserPass(
+  cleanUrl: string,
+  username?: string,
+  password?: string,
+  useProxy: boolean = true
+): Promise<AbsAuthResult> {
+  if (!username || !password) {
+    throw new Error('Username and password are required');
+  }
+
+  const res = await absFetch(
+    `${cleanUrl}/login`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: { username, password },
+    },
+    useProxy
+  );
+
+  if (!res.ok) {
+    throw new Error(formatAuthErrorMessage(res, 'Authentication failed'));
+  }
+
+  const data = res.data;
+  const user = data.user || { id: data.id || 'user_1', username: data.username || username };
+  const authToken = data.user?.token || data.token;
+
+  if (!authToken) {
+    throw new Error('No authentication token returned by Audiobookshelf server.');
+  }
+
+  return {
+    token: authToken,
+    user: {
+      id: String(user.id),
+      username: String(user.username),
+    },
+  };
+}
+
+async function verifyTokenEndpoint(
+  cleanUrl: string,
+  endpoint: string,
+  method: string,
+  cleanToken: string,
+  useProxy: boolean
+) {
+  return absFetch(
+    `${cleanUrl}${endpoint}`,
+    {
+      method,
+      headers: {
+        Authorization: `Bearer ${cleanToken}`,
+      },
+    },
+    useProxy
+  );
+}
+
+function formatTokenErrorMessage(res: { status: number; data: any }, cleanUrl: string): string {
+  if (res.status === 401 || res.status === 403) {
+    return 'Audiobookshelf rejected your API token (HTTP 401 Unauthorized). Please check your API token in Audiobookshelf (Profile icon → API Token → Copy Token).';
+  }
+  if (res.status === 404) {
+    return `Audiobookshelf server at ${cleanUrl} returned 404 Not Found. Please check that your Server URL is correct.`;
+  }
+  if (res.status === 502) {
+    const detail = res.data?.detail || res.data?.message || (typeof res.data === 'string' ? res.data : '');
+    return detail
+      ? `Connection to Audiobookshelf failed (HTTP 502 Bad Gateway): ${detail}. If Audiobookshelf runs in Docker, ensure ABS_TARGET_SERVER in ecosystem.config.cjs points to your Host LAN IP (e.g. http://192.168.68.102:13378) instead of localhost/127.0.0.1.`
+      : `Connection to Audiobookshelf failed (HTTP 502 Bad Gateway): The proxy or sidecar could not reach Audiobookshelf. If Audiobookshelf is running in Docker, ensure ABS_TARGET_SERVER points to your Host LAN IP (e.g. http://192.168.68.102:13378) rather than localhost or your public domain.`;
+  }
+  return `Token verification failed (HTTP ${res.status}). Verify your Audiobookshelf API key.`;
+}
+
+async function authenticateWithToken(
+  cleanUrl: string,
+  token?: string,
+  useProxy: boolean = true
+): Promise<AbsAuthResult> {
+  if (!token) {
+    throw new Error('API Token / Key is required');
+  }
+
+  const cleanToken = stripBearerPrefix(token);
+
+  let res = await verifyTokenEndpoint(cleanUrl, '/api/authorize', 'POST', cleanToken, useProxy);
+
+  if (!res.ok && res.status !== 401 && res.status !== 403) {
+    res = await verifyTokenEndpoint(cleanUrl, '/api/authorize', 'GET', cleanToken, useProxy);
+  }
+
+  if (!res.ok && res.status !== 401 && res.status !== 403) {
+    res = await verifyTokenEndpoint(cleanUrl, '/api/me', 'GET', cleanToken, useProxy);
+  }
+
+  if (!res.ok) {
+    throw new Error(formatTokenErrorMessage(res, cleanUrl));
+  }
+
+  const data = res.data;
+  const user = data.user || data;
+
+  return {
+    token: cleanToken,
+    user: {
+      id: String(user.id || 'abs_user'),
+      username: String(user.username || 'abs_listener'),
+    },
   };
 }
 
@@ -149,127 +295,33 @@ export async function authenticateAbs(
   const cleanUrl = normalizeServerUrl(serverUrl);
 
   if (authMode === 'userpass') {
-    if (!username || !password) {
-      throw new Error('Username and password are required');
-    }
-
-    const res = await absFetch(
-      `${cleanUrl}/login`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: { username, password },
-      },
-      useProxy
-    );
-
-    if (!res.ok) {
-      if (res.status === 401 || res.status === 403) {
-        throw new Error('Invalid username or password. Please verify your Audiobookshelf credentials.');
-      }
-      if (res.status === 502) {
-        const detail = res.data?.detail || res.data?.message || (typeof res.data === 'string' ? res.data : '');
-        throw new Error(
-          detail
-            ? `Connection to Audiobookshelf failed (HTTP 502 Bad Gateway): ${detail}. If Audiobookshelf runs in Docker, ensure ABS_TARGET_SERVER in ecosystem.config.cjs points to your Host LAN IP (e.g. http://192.168.68.102:13378) instead of localhost/127.0.0.1.`
-            : `Connection to Audiobookshelf failed (HTTP 502 Bad Gateway): The proxy or sidecar could not reach Audiobookshelf. If Audiobookshelf is running in Docker, ensure ABS_TARGET_SERVER points to your Host LAN IP (e.g. http://192.168.68.102:13378) rather than localhost or your public domain.`
-        );
-      }
-      const errDetail = typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
-      throw new Error(`Authentication failed (HTTP ${res.status}): ${errDetail}`);
-    }
-
-    const data = res.data;
-    const user = data.user || { id: data.id || 'user_1', username: data.username || username };
-    const authToken = data.user?.token || data.token;
-
-    if (!authToken) {
-      throw new Error('No authentication token returned by Audiobookshelf server.');
-    }
-
-    return {
-      token: authToken,
-      user: {
-        id: String(user.id),
-        username: String(user.username),
-      },
-    };
-  } else {
-    if (!token) {
-      throw new Error('API Token / Key is required');
-    }
-
-    const cleanToken = token.trim().replace(/^bearer\s+/i, '').replace(/["']/g, '').trim();
-
-    // 1. Try POST /api/authorize (Audiobookshelf's official endpoint for Bearer tokens)
-    let res = await absFetch(
-      `${cleanUrl}/api/authorize`,
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${cleanToken}`,
-        },
-      },
-      useProxy
-    );
-
-    // 2. If 404 or 405, fallback to GET /api/authorize
-    if (!res.ok && res.status !== 401 && res.status !== 403) {
-      res = await absFetch(
-        `${cleanUrl}/api/authorize`,
-        {
-          method: 'GET',
-          headers: {
-            Authorization: `Bearer ${cleanToken}`,
-          },
-        },
-        useProxy
-      );
-    }
-
-    // 3. Fallback to GET /api/me if authorize is not found
-    if (!res.ok && res.status !== 401 && res.status !== 403) {
-      res = await absFetch(
-        `${cleanUrl}/api/me`,
-        {
-          method: 'GET',
-          headers: {
-            Authorization: `Bearer ${cleanToken}`,
-          },
-        },
-        useProxy
-      );
-    }
-
-    if (!res.ok) {
-      if (res.status === 401 || res.status === 403) {
-        throw new Error('Audiobookshelf rejected your API token (HTTP 401 Unauthorized). Please check your API token in Audiobookshelf (Profile icon → API Token → Copy Token).');
-      }
-      if (res.status === 404) {
-        throw new Error(`Audiobookshelf server at ${cleanUrl} returned 404 Not Found. Please check that your Server URL is correct.`);
-      }
-      if (res.status === 502) {
-        const detail = res.data?.detail || res.data?.message || (typeof res.data === 'string' ? res.data : '');
-        throw new Error(
-          detail
-            ? `Connection to Audiobookshelf failed (HTTP 502 Bad Gateway): ${detail}. If Audiobookshelf runs in Docker, ensure ABS_TARGET_SERVER in ecosystem.config.cjs points to your Host LAN IP (e.g. http://192.168.68.102:13378) instead of localhost/127.0.0.1.`
-            : `Connection to Audiobookshelf failed (HTTP 502 Bad Gateway): The proxy or sidecar could not reach Audiobookshelf. If Audiobookshelf is running in Docker, ensure ABS_TARGET_SERVER points to your Host LAN IP (e.g. http://192.168.68.102:13378) rather than localhost or your public domain.`
-        );
-      }
-      throw new Error(`Token verification failed (HTTP ${res.status}). Verify your Audiobookshelf API key.`);
-    }
-
-    const data = res.data;
-    const user = data.user || data;
-
-    return {
-      token: cleanToken,
-      user: {
-        id: String(user.id || 'abs_user'),
-        username: String(user.username || 'abs_listener'),
-      },
-    };
+    return authenticateWithUserPass(cleanUrl, username, password, useProxy);
   }
+
+  return authenticateWithToken(cleanUrl, token, useProxy);
+}
+
+function findMatchingAudioFile(audioFiles: any[], curTime: number): any {
+  if (!audioFiles || audioFiles.length === 0) return null;
+  for (const af of audioFiles) {
+    const afStart = Number(af.startOffset ?? 0);
+    const afDur = Number(af.duration ?? af.metadata?.duration ?? 0);
+    if (afDur > 0 && curTime >= afStart && curTime <= (afStart + afDur)) {
+      return af;
+    }
+  }
+  return audioFiles[0];
+}
+
+function extractFilePathFromFile(file: any, dirPath: string): string | null {
+  if (file?.metadata?.path) return file.metadata.path;
+  if (file?.path) return file.path;
+  const filename = file?.metadata?.filename ?? file?.filename;
+  if (dirPath && filename) {
+    return `${stripTrailingSlash(dirPath)}/${filename}`;
+  }
+  if (filename) return filename;
+  return null;
 }
 
 /**
@@ -277,38 +329,169 @@ export async function authenticateAbs(
  * from Audiobookshelf media metadata, track offset, or item path.
  */
 function resolveRealAudioFilePath(media: any, item: any, activeTrack: any, curTime: number): string {
-  const audioFiles: any[] = media?.audioFiles || media?.tracks || item?.media?.audioFiles || [];
+  const audioFiles: any[] = media?.audioFiles ?? media?.tracks ?? item?.media?.audioFiles ?? [];
+  const dirPath = media?.path ?? item?.path ?? '';
 
-  if (audioFiles.length > 0) {
-    let selectedFile = audioFiles[0];
-    for (const af of audioFiles) {
-      const afStart = Number(af.startOffset ?? 0);
-      const afDur = Number(af.duration ?? af.metadata?.duration ?? 0);
-      if (afDur > 0 && curTime >= afStart && curTime <= (afStart + afDur)) {
-        selectedFile = af;
-        break;
-      }
-    }
-
-    if (selectedFile?.metadata?.path) return selectedFile.metadata.path;
-    if (selectedFile?.path) return selectedFile.path;
-
-    const dirPath = media?.path || item?.path || '';
-    const filename = selectedFile?.metadata?.filename || selectedFile?.filename;
-    if (dirPath && filename) {
-      return `${dirPath.replace(/\/+$/, '')}/${filename}`;
-    }
-    if (filename) return filename;
+  const matched = findMatchingAudioFile(audioFiles, curTime);
+  if (matched) {
+    const p = extractFilePathFromFile(matched, dirPath);
+    if (p) return p;
   }
 
-  if (activeTrack?.metadata?.path) return activeTrack.metadata.path;
-  if (activeTrack?.path) return activeTrack.path;
-  if (activeTrack?.metadata?.filename) return activeTrack.metadata.filename;
+  const trackPath = activeTrack?.metadata?.path ?? activeTrack?.path ?? activeTrack?.metadata?.filename;
+  if (trackPath) return trackPath;
 
   if (media?.path) return media.path;
   if (item?.path) return item.path;
 
   return 'Audio file path not reported by Audiobookshelf (check server audio mount)';
+}
+
+async function fetchLatestMediaProgress(
+  cleanUrl: string,
+  token: string,
+  useProxy: boolean
+): Promise<any | null> {
+  const meRes = await absFetch(
+    `${cleanUrl}/api/me`,
+    { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
+    useProxy
+  );
+  if (!meRes.ok || !meRes.data) return null;
+
+  const progressList = meRes.data.user?.mediaProgress ?? meRes.data.mediaProgress ?? [];
+  if (!Array.isArray(progressList) || progressList.length === 0) return null;
+
+  progressList.sort((a: any, b: any) => (b.lastUpdate || 0) - (a.lastUpdate || 0));
+  return progressList[0];
+}
+
+function buildSessionFromMediaItem(item: any, latest: any): AbsActiveSession {
+  const media = item.media ?? {};
+  const meta = media.metadata ?? {};
+  const curTime = Math.floor(latest.currentTime ?? 0);
+  const chapters = media.chapters ?? [];
+  const curChapter = chapters.find(
+    (c: { start: number; end: number }) => curTime >= c.start && curTime <= c.end
+  );
+
+  return {
+    libraryItemId: item.id ?? latest.libraryItemId,
+    episodeId: latest.episodeId ?? null,
+    bookTitle: meta.title ?? 'In-Progress Audiobook',
+    subtitle: meta.subtitle ?? '',
+    author: formatAuthors(meta.authors, meta.author, meta.authorName, 'Unknown Author'),
+    chapterName: curChapter?.title ?? curChapter?.name ?? 'Current Chapter',
+    currentTime: curTime,
+    audioFilePath: resolveRealAudioFilePath(media, item, null, curTime),
+    duration: latest.duration ?? media.duration,
+    bookmarks: latest.bookmarks ?? media.bookmarks ?? [],
+  };
+}
+
+async function queryFallbackMediaProgress(
+  cleanUrl: string,
+  token: string,
+  useProxy: boolean
+): Promise<AbsActiveSession | null> {
+  try {
+    const latest = await fetchLatestMediaProgress(cleanUrl, token, useProxy);
+    if (!latest) return null;
+
+    const itemRes = await absFetch(
+      `${cleanUrl}/api/items/${latest.libraryItemId}?expanded=1`,
+      { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
+      useProxy
+    );
+    if (!itemRes.ok || !itemRes.data) return null;
+
+    return buildSessionFromMediaItem(itemRes.data, latest);
+  } catch {
+    return null;
+  }
+}
+
+interface MutableSessionMetadata {
+  bookTitle: string;
+  subtitle: string;
+  author: string;
+  chapterName: string;
+  audioFilePath: string;
+  duration: number;
+  coverPath?: string;
+  bookmarks: any[];
+}
+
+function applyItemMetadataProperties(
+  mMeta: Record<string, unknown>,
+  media: Record<string, unknown>,
+  curTime: number,
+  meta: MutableSessionMetadata
+): void {
+  if (typeof mMeta.title === 'string') meta.bookTitle = mMeta.title;
+  if (typeof mMeta.subtitle === 'string') meta.subtitle = mMeta.subtitle;
+  if (mMeta.authors || mMeta.author || mMeta.authorName) {
+    meta.author = formatAuthors(mMeta.authors, mMeta.author, mMeta.authorName, meta.author);
+  }
+  if (typeof media.duration === 'number') meta.duration = media.duration;
+  if (typeof media.coverPath === 'string') meta.coverPath = media.coverPath;
+  if (Array.isArray(media.bookmarks) && media.bookmarks.length > 0) {
+    meta.bookmarks = media.bookmarks;
+  }
+
+  const chapters = Array.isArray(media.chapters) ? media.chapters : [];
+  const matched = chapters.find(
+    (c: { start: number; end: number }) => curTime >= c.start && curTime <= c.end
+  );
+  if (matched?.title || matched?.name) {
+    meta.chapterName = matched.title ?? matched.name;
+  }
+}
+
+async function enrichSessionFromItem(
+  cleanUrl: string,
+  libraryItemId: string,
+  token: string,
+  useProxy: boolean,
+  curTime: number,
+  activeAudioTrack: any,
+  meta: MutableSessionMetadata
+): Promise<void> {
+  try {
+    const itemRes = await absFetch(
+      `${cleanUrl}/api/items/${libraryItemId}?expanded=1`,
+      { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
+      useProxy
+    );
+    if (!itemRes.ok || !itemRes.data) return;
+
+    const item = itemRes.data;
+    const media = item.media ?? {};
+    const mMeta = media.metadata ?? {};
+
+    applyItemMetadataProperties(mMeta, media, curTime, meta);
+    meta.audioFilePath = resolveRealAudioFilePath(media, item, activeAudioTrack, curTime);
+  } catch {
+    // Continue with best available metadata
+  }
+}
+
+function buildInitialSessionMetadata(active: any): MutableSessionMetadata {
+  return {
+    bookTitle: active.mediaMetadata?.title ?? active.displayTitle ?? 'Audiobook Title',
+    subtitle: active.mediaMetadata?.subtitle ?? '',
+    author: formatAuthors(
+      active.mediaMetadata?.authors,
+      active.mediaMetadata?.author,
+      active.mediaMetadata?.authorName,
+      active.displayAuthor
+    ),
+    chapterName: active.currentChapter?.title ?? active.currentChapter?.name ?? 'Current Chapter',
+    audioFilePath: '',
+    duration: active.duration ?? active.mediaMetadata?.duration,
+    coverPath: active.mediaMetadata?.coverPath ?? active.coverPath,
+    bookmarks: active.bookmarks ?? active.libraryItem?.media?.bookmarks ?? [],
+  };
 }
 
 /**
@@ -319,7 +502,7 @@ export async function fetchActiveSession(
   token: string,
   useProxy: boolean = true
 ): Promise<AbsActiveSession> {
-  const cleanUrl = serverUrl.replace(/\/+$/, '');
+  const cleanUrl = stripTrailingSlash(serverUrl);
 
   const res = await absFetch(
     `${cleanUrl}/api/me/listening-sessions`,
@@ -337,138 +520,40 @@ export async function fetchActiveSession(
   }
 
   const data = res.data;
-  const sessions = Array.isArray(data) ? data : data.sessions || [];
+  const sessions = Array.isArray(data) ? data : data.sessions ?? [];
 
   if (sessions.length === 0) {
-    // Fallback: check /api/me for mediaProgress if listening-sessions is empty
-    try {
-      const meRes = await absFetch(
-        `${cleanUrl}/api/me`,
-        {
-          method: 'GET',
-          headers: { Authorization: `Bearer ${token}` },
-        },
-        useProxy
-      );
-      if (meRes.ok && meRes.data) {
-        const progressList = meRes.data.user?.mediaProgress || meRes.data.mediaProgress || [];
-        if (progressList.length > 0) {
-          progressList.sort((a: any, b: any) => (b.lastUpdate || 0) - (a.lastUpdate || 0));
-          const latest = progressList[0];
-          const itemRes = await absFetch(
-            `${cleanUrl}/api/items/${latest.libraryItemId}?expanded=1`,
-            {
-              method: 'GET',
-              headers: { Authorization: `Bearer ${token}` },
-            },
-            useProxy
-          );
-          if (itemRes.ok && itemRes.data) {
-            const item = itemRes.data;
-            const media = item.media || {};
-            const meta = media.metadata || {};
-            const curTime = Math.floor(latest.currentTime || 0);
-            const chapters = media.chapters || [];
-            const curChapter = chapters.find(
-              (c: { start: number; end: number }) => curTime >= c.start && curTime <= c.end
-            );
-            return {
-              libraryItemId: item.id || latest.libraryItemId,
-              episodeId: latest.episodeId || null,
-              bookTitle: meta.title || 'In-Progress Audiobook',
-              subtitle: meta.subtitle || '',
-              author: formatAuthors(meta.authors, meta.author, meta.authorName, 'Unknown Author'),
-              chapterName: curChapter?.title || curChapter?.name || 'Current Chapter',
-              currentTime: curTime,
-              audioFilePath: resolveRealAudioFilePath(media, item, null, curTime),
-              duration: latest.duration || media.duration,
-              bookmarks: latest.bookmarks || media.bookmarks || [],
-            };
-          }
-        }
-      }
-    } catch {
-      // Fallback attempt failed, will throw original descriptive error below
-    }
-
+    const fallback = await queryFallbackMediaProgress(cleanUrl, token, useProxy);
+    if (fallback) return fallback;
     throw new Error('No active listening sessions found on Audiobookshelf. Start playing an audiobook on Audiobookshelf first.');
   }
 
   const active = sessions[0];
-  const libraryItemId = active.libraryItemId || active.id;
-  const curTime = Math.floor(active.currentTime || 0);
+  const libraryItemId = active.libraryItemId ?? active.id;
+  const curTime = Math.floor(active.currentTime ?? 0);
 
-  let bookTitle = active.mediaMetadata?.title || active.displayTitle || 'Audiobook Title';
-  let subtitle = active.mediaMetadata?.subtitle || '';
-  let author = formatAuthors(
-    active.mediaMetadata?.authors,
-    active.mediaMetadata?.author,
-    active.mediaMetadata?.authorName,
-    active.displayAuthor
-  );
-  let chapterName = active.currentChapter?.title || active.currentChapter?.name || 'Current Chapter';
-  let audioFilePath = '';
-  let duration = active.duration || active.mediaMetadata?.duration;
-  let bookmarks = active.bookmarks || active.libraryItem?.media?.bookmarks || [];
-  let coverPath = active.mediaMetadata?.coverPath || active.coverPath;
+  const meta = buildInitialSessionMetadata(active);
 
-  // Always query item details (/api/items/{id}?expanded=1) to retrieve the real file path on disk and chapter metadata
   if (libraryItemId) {
-    try {
-      const itemRes = await absFetch(
-        `${cleanUrl}/api/items/${libraryItemId}?expanded=1`,
-        {
-          method: 'GET',
-          headers: { Authorization: `Bearer ${token}` },
-        },
-        useProxy
-      );
-      if (itemRes.ok && itemRes.data) {
-        const item = itemRes.data;
-        const media = item.media || {};
-        const meta = media.metadata || {};
-
-        if (meta.title) bookTitle = meta.title;
-        if (meta.subtitle) subtitle = meta.subtitle;
-        if (meta.authors || meta.author || meta.authorName) {
-          author = formatAuthors(meta.authors, meta.author, meta.authorName, author);
-        }
-
-        if (media.duration) duration = media.duration;
-        if (media.coverPath) coverPath = media.coverPath;
-        if (media.bookmarks?.length) bookmarks = media.bookmarks;
-
-        const chapters = media.chapters || [];
-        const matchedChapter = chapters.find(
-          (c: { start: number; end: number }) => curTime >= c.start && curTime <= c.end
-        );
-        if (matchedChapter?.title || matchedChapter?.name) {
-          chapterName = matchedChapter.title || matchedChapter.name;
-        }
-
-        audioFilePath = resolveRealAudioFilePath(media, item, active.audioTrack, curTime);
-      }
-    } catch {
-      // Continue with best available metadata
-    }
+    await enrichSessionFromItem(cleanUrl, libraryItemId, token, useProxy, curTime, active.audioTrack, meta);
   }
 
-  if (!audioFilePath) {
-    audioFilePath = resolveRealAudioFilePath(active.media, active.libraryItem, active.audioTrack, curTime);
+  if (!meta.audioFilePath) {
+    meta.audioFilePath = resolveRealAudioFilePath(active.media, active.libraryItem, active.audioTrack, curTime);
   }
 
   return {
-    libraryItemId: libraryItemId || 'item_default',
-    episodeId: active.episodeId || null,
-    bookTitle,
-    subtitle,
-    author,
-    chapterName,
+    libraryItemId: libraryItemId ?? 'item_default',
+    episodeId: active.episodeId ?? null,
+    bookTitle: meta.bookTitle,
+    subtitle: meta.subtitle,
+    author: meta.author,
+    chapterName: meta.chapterName,
     currentTime: curTime,
-    audioFilePath,
-    duration,
-    coverPath,
-    bookmarks,
+    audioFilePath: meta.audioFilePath,
+    duration: meta.duration,
+    coverPath: meta.coverPath,
+    bookmarks: meta.bookmarks,
   };
 }
 
@@ -484,7 +569,7 @@ export async function createSnippet(
   libraryItemId?: string,
   startTime?: number
 ): Promise<Snippet> {
-  const cleanUrl = sidecarUrl.replace(/\/+$/, '');
+  const cleanUrl = stripTrailingSlash(sidecarUrl);
 
   const res = await absFetch(
     `${cleanUrl}/api/snippet`,
@@ -528,34 +613,40 @@ export async function createSnippet(
   };
 }
 
+function isExternalBrowserHost(): boolean {
+  if (typeof window === 'undefined') return false;
+  const h = window.location.hostname;
+  return h !== 'localhost' && h !== '127.0.0.1';
+}
+
+function resolveLocalhostRelPath(urlStr: string): string | null {
+  try {
+    const parsed = new URL(urlStr);
+    if (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') {
+      return `${parsed.pathname}${parsed.search}`;
+    }
+  } catch {}
+  return null;
+}
+
 /**
  * Resolves an audio URL so that clients accessing externally or through a domain
  * stream audio seamlessly via the dashboard server proxy instead of failing on client localhost.
  */
 export function getPlayableAudioUrl(
   rawUrl?: string,
-  targetSidecar?: string,
-  proxyEnabled: boolean = true
+  _targetSidecar?: string,
+  _proxyEnabled: boolean = true
 ): string {
   if (!rawUrl) return '';
   if (rawUrl.startsWith('http://') || rawUrl.startsWith('https://')) {
-    // If an external client received a URL pointing to localhost:13380, strip host to route relatively via web server
-    if (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-      try {
-        const parsed = new URL(rawUrl);
-        if (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') {
-          return `${parsed.pathname}${parsed.search}`;
-        }
-      } catch {}
+    if (isExternalBrowserHost()) {
+      const rel = resolveLocalhostRelPath(rawUrl);
+      if (rel) return rel;
     }
     return rawUrl;
   }
-  const cleanPath = rawUrl.startsWith('/') ? rawUrl : `/${rawUrl}`;
-  // Prefer relative URL handled by dashboard proxy whenever proxy is enabled or sidecar is localhost
-  if (proxyEnabled || !targetSidecar || targetSidecar.includes('localhost') || targetSidecar.includes('127.0.0.1')) {
-    return cleanPath;
-  }
-  return `${targetSidecar.replace(/\/+$/, '')}${cleanPath}`;
+  return rawUrl.startsWith('/') ? rawUrl : `/${rawUrl}`;
 }
 
 /**
@@ -569,7 +660,7 @@ export async function createAbsBookmark(
   title: string,
   useProxy: boolean = true
 ): Promise<{ ok: boolean; data: any }> {
-  const cleanUrl = serverUrl.replace(/\/+$/, '');
+  const cleanUrl = stripTrailingSlash(serverUrl);
   return absFetch(
     `${cleanUrl}/api/me/bookmarks`,
     {

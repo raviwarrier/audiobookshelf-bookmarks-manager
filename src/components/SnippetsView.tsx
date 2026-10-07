@@ -1,34 +1,21 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { 
-  Search, 
-  Download, 
-  Copy, 
-  Trash2, 
-  Check, 
-  FileText, 
-  FileAudio,
-  BookmarkPlus,
-  FolderTree,
-  User as UserIcon,
-  RefreshCw,
-  Sliders,
-  Archive,
-  AlertTriangle,
-  RotateCw,
-  X,
-  BookOpen,
-  ChevronDown,
-  ArrowUpDown,
-  ArrowUp,
-  ArrowDown,
-  Calendar,
-  Settings,
-  Clock
-} from 'lucide-react';
-import { Snippet, AbsUser, SyncState, CutoffMode, CutoffConfig } from '../types';
-import { safeSidecarFetch } from '../lib/safeFetch';
+import React, { useState, useRef, useEffect } from 'react';
+import { AlertTriangle } from 'lucide-react';
+import { Snippet, AbsUser, SyncState } from '../types';
+import { SnippetsHeader } from './SnippetsHeader';
+import { SnippetSortBar } from './SnippetSortBar';
+import { BookFilterBar } from './BookFilterBar';
+import { SnippetList } from './SnippetList';
+import { SyncStatusBanner } from './SyncStatusBanner';
+import { ExpandSnippetModal } from './ExpandSnippetModal';
+import { CutoffModal } from './CutoffModal';
+import {
+  useSnippetSorting,
+  useSnippetFiltering,
+  useCutoffConfigManager,
+  useSnippetOperations
+} from '../lib/snippetHooks';
 
-interface SnippetsViewProps {
+export interface SnippetsViewProps {
   snippets: Snippet[];
   user: AbsUser | null;
   activeToken?: string | null;
@@ -62,31 +49,13 @@ export const SnippetsView: React.FC<SnippetsViewProps> = ({
   onCutoffUpdated,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
-  const [copiedId, setCopiedId] = useState<string | null>(null);
-  const [copiedCitationId, setCopiedCitationId] = useState<string | null>(null);
-
-  // Expand / Adjust Snippet Modal State
-  const [expandSnippet, setExpandSnippet] = useState<Snippet | null>(null);
-  const [preRoll, setPreRoll] = useState<number>(30);
-  const [postRoll, setPostRoll] = useState<number>(60);
-  const [isExpanding, setIsExpanding] = useState<boolean>(false);
-  const [expandError, setExpandError] = useState<string | null>(null);
-  const [expandSuccess, setExpandSuccess] = useState<string | null>(null);
-
-  // Retry extraction state
-  const [retryingSnippetId, setRetryingSnippetId] = useState<string | null>(null);
-  const [retryNotification, setRetryNotification] = useState<{ id: string; type: 'success' | 'error'; message: string } | null>(null);
-
-  // Exporting state
-  const [exportingBook, setExportingBook] = useState<string | null>(null);
-  const [exportError, setExportError] = useState<string | null>(null);
   const [selectedBookFilter, setSelectedBookFilter] = useState<string | null>(null);
   const [bookFilterQuery, setBookFilterQuery] = useState<string>('');
   const [isBookDropdownOpen, setIsBookDropdownOpen] = useState<boolean>(false);
-  const bookDropdownRef = React.useRef<HTMLDivElement>(null);
-  const [openExportDropdownId, setOpenExportDropdownId] = useState<string | null>(null);
+  const bookDropdownRef = useRef<HTMLDivElement>(null);
 
-  // Close book dropdown when clicking outside
+  const sorting = useSnippetSorting();
+
   useEffect(() => {
     const handleOutsideClick = (e: MouseEvent) => {
       if (bookDropdownRef.current && !bookDropdownRef.current.contains(e.target as Node)) {
@@ -97,1440 +66,135 @@ export const SnippetsView: React.FC<SnippetsViewProps> = ({
     return () => document.removeEventListener('mousedown', handleOutsideClick);
   }, []);
 
-  // Sorting state (by Date or Book, Ascending / Descending)
-  const [sortField, setSortField] = useState<'date' | 'book'>('date');
-  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
-
-  // Cutoff Period Configuration State
-  const nativeDatePickerRef = useRef<HTMLInputElement>(null);
-  const [isCutoffModalOpen, setIsCutoffModalOpen] = useState<boolean>(false);
-  const [selectedCutoffMode, setSelectedCutoffMode] = useState<CutoffMode>(
-    syncState?.cutoff_mode || 'from_now'
+  const { uniqueBooks, matchingBooks, sortedSnippets } = useSnippetFiltering(
+    snippets,
+    searchTerm,
+    selectedBookFilter,
+    bookFilterQuery,
+    sorting.sortField,
+    sorting.sortDirection
   );
 
-  const formatToSlashDate = (raw?: string | null): string => {
-    if (!raw) return '';
-    const trimmed = raw.trim();
-    const clean = trimmed.replace(/[-.]/g, '/');
-    const m = clean.match(/^(\d{2,4})\/(\d{1,2})\/(\d{1,2})/);
-    if (m) {
-      let year = m[1];
-      if (year.length === 2) {
-        year = `20${year}`;
-      }
-      const month = m[2].padStart(2, '0');
-      const day = m[3].padStart(2, '0');
-      return `${year}/${month}/${day}`;
-    }
-    return trimmed;
-  };
-
-  const normalizeToIsoDate = (raw: string): string => {
-    const trimmed = raw.trim();
-    const clean = trimmed.replace(/[/.]/g, '-');
-    const ymd = clean.match(/^(\d{2,4})-(\d{1,2})-(\d{1,2})$/);
-    if (ymd) {
-      let year = ymd[1];
-      if (year.length === 2) {
-        year = `20${year}`;
-      }
-      const month = ymd[2].padStart(2, '0');
-      const day = ymd[3].padStart(2, '0');
-      return `${year}-${month}-${day}`;
-    }
-    const mdy = clean.match(/^(\d{1,2})-(\d{1,2})-(\d{2,4})$/);
-    if (mdy) {
-      let year = mdy[3];
-      if (year.length === 2) {
-        year = `20${year}`;
-      }
-      const month = mdy[1].padStart(2, '0');
-      const day = mdy[2].padStart(2, '0');
-      return `${year}-${month}-${day}`;
-    }
-    return clean;
-  };
-
-  const [customDateInput, setCustomDateInput] = useState<string>(() =>
-    formatToSlashDate(
-      syncState?.custom_cutoff_date || syncState?.installation_date || new Date().toISOString().slice(0, 10)
-    )
-  );
-  const [isSavingCutoff, setIsSavingCutoff] = useState<boolean>(false);
-  const [cutoffSaveError, setCutoffSaveError] = useState<string | null>(null);
-  const [cutoffSaveSuccess, setCutoffSaveSuccess] = useState<string | null>(null);
-
-  // Keep cutoff modal in sync when syncState changes externally
-  useEffect(() => {
-    if (syncState?.cutoff_mode) {
-      setSelectedCutoffMode(syncState.cutoff_mode);
-    }
-    if (syncState?.custom_cutoff_date) {
-      setCustomDateInput(formatToSlashDate(syncState.custom_cutoff_date));
-    } else if (syncState?.installation_date) {
-      setCustomDateInput((prev) => prev || formatToSlashDate(syncState.installation_date));
-    }
-  }, [syncState?.cutoff_mode, syncState?.custom_cutoff_date, syncState?.installation_date]);
-
-  const handleSaveCutoffConfig = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsSavingCutoff(true);
-    setCutoffSaveError(null);
-    setCutoffSaveSuccess(null);
-
-    try {
-      let formattedDate: string | undefined = undefined;
-      if (selectedCutoffMode === 'custom_date') {
-        const iso = normalizeToIsoDate(customDateInput);
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) {
-          throw new Error('Please enter a valid date in yyyy/mm/dd (e.g. 2026/09/24 or 26/09/24).');
-        }
-        const d = new Date(iso);
-        if (isNaN(d.getTime())) {
-          throw new Error('Invalid calendar date specified.');
-        }
-        formattedDate = iso;
-      }
-
-      const payload = {
-        cutoff_mode: selectedCutoffMode,
-        custom_date: formattedDate
-      };
-
-      let data: any = null;
-
-      const res = await safeSidecarFetch('/api/cutoff-config', {
-        method: 'POST',
-        token: activeToken,
-        serverUrl,
-        sidecarUrl,
-        useProxy,
-        body: payload,
-      });
-
-      if (res.ok && res.data && (res.data.status === 'success' || res.data.config)) {
-        data = res.data;
-      } else {
-        const err = res.data?.detail || res.data?.error || res.data?.message || `Failed with status ${res.status}`;
-        throw new Error(typeof err === 'string' ? err : 'Failed to update cutoff configuration');
-      }
-
-      setCutoffSaveSuccess('Cutoff period updated successfully!');
-      
-      // Update local sync state if available
-      if (data?.config && onCutoffUpdated) {
-        onCutoffUpdated({
-          is_syncing: syncState?.is_syncing || false,
-          last_synced_at: syncState?.last_synced_at || null,
-          total_synced: syncState?.total_synced || 0,
-          current_item: syncState?.current_item || null,
-          last_error: null,
-          installation_date: data.config.installation_date,
-          cutoff_datetime: data.config.cutoff_datetime,
-          cutoff_mode: data.config.cutoff_mode,
-          custom_cutoff_date: data.config.custom_date,
-          installed_at: data.config.installed_at,
-          skipped_before_cutoff: syncState?.skipped_before_cutoff || 0,
-          skipped_tombstoned: syncState?.skipped_tombstoned || 0,
-        });
-      }
-
-      // Trigger re-sync with newly configured cutoff
-      if (onTriggerSync) {
-        setTimeout(() => {
-          onTriggerSync();
-        }, 500);
-      }
-
-      setTimeout(() => {
-        setIsCutoffModalOpen(false);
-        setCutoffSaveSuccess(null);
-      }, 1200);
-
-    } catch (err: unknown) {
-      setCutoffSaveError(err instanceof Error ? err.message : 'Error updating cutoff configuration');
-    } finally {
-      setIsSavingCutoff(false);
-    }
-  };
-
-  useEffect(() => {
-    if (!openExportDropdownId) return;
-    const handleGlobalClick = () => setOpenExportDropdownId(null);
-    window.addEventListener('click', handleGlobalClick);
-    return () => window.removeEventListener('click', handleGlobalClick);
-  }, [openExportDropdownId]);
-
-  // Group snippets by unique books (sorted alphabetically)
-  const uniqueBooks: string[] = (
-    Array.from(new Set(snippets.map((s) => s.bookTitle).filter(Boolean))) as string[]
-  ).sort((a, b) => a.localeCompare(b));
-
-  const activeBookQuery = (selectedBookFilter || bookFilterQuery).trim().toLowerCase();
-
-  const matchingBooks = uniqueBooks.filter((b) =>
-    b.toLowerCase().includes(bookFilterQuery.trim().toLowerCase())
+  const cutoffMgr = useCutoffConfigManager(
+    syncState,
+    activeToken,
+    serverUrl,
+    sidecarUrl,
+    useProxy,
+    onCutoffUpdated,
+    onTriggerSync
   );
 
-  const filteredSnippets = snippets.filter((s) => {
-    const sBook = (s.bookTitle || '').toLowerCase();
-    const sAuthor = (s.author || '').toLowerCase();
-    const sChapter = (s.chapterName || '').toLowerCase();
-    const sTranscript = (s.transcript || '').toLowerCase();
-
-    const matchesSearch =
-      !searchTerm ||
-      sBook.includes(searchTerm.toLowerCase()) ||
-      sAuthor.includes(searchTerm.toLowerCase()) ||
-      sChapter.includes(searchTerm.toLowerCase()) ||
-      sTranscript.includes(searchTerm.toLowerCase());
-
-    const matchesBook =
-      !activeBookQuery ||
-      (selectedBookFilter
-        ? sBook === selectedBookFilter.toLowerCase()
-        : sBook.includes(activeBookQuery));
-
-    return matchesSearch && matchesBook;
-  });
-
-  const getSnippetTime = (s: Snippet): number => {
-    if (typeof s.createdAt === 'number' && !isNaN(s.createdAt) && s.createdAt > 0) {
-      return s.createdAt;
-    }
-    if (s.timestamp) {
-      const match = s.timestamp.match(/^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/);
-      if (match) {
-        const d = new Date(`${match[1]}-${match[2]}-${match[3]}T${match[4]}:${match[5]}:${match[6]}`);
-        if (!isNaN(d.getTime())) return d.getTime();
-      }
-      const d = new Date(s.timestamp);
-      if (!isNaN(d.getTime())) return d.getTime();
-    }
-    return 0;
-  };
-
-  const sortedSnippets = [...filteredSnippets].sort((a, b) => {
-    if (sortField === 'date') {
-      const timeA = getSnippetTime(a);
-      const timeB = getSnippetTime(b);
-      if (timeA !== timeB) {
-        return sortDirection === 'desc' ? timeB - timeA : timeA - timeB;
-      }
-      return a.bookTitle.localeCompare(b.bookTitle);
-    } else {
-      // Sort by book title
-      const cmp = a.bookTitle.localeCompare(b.bookTitle, undefined, { sensitivity: 'base' });
-      if (cmp !== 0) {
-        return sortDirection === 'asc' ? cmp : -cmp;
-      }
-      return getSnippetTime(b) - getSnippetTime(a);
-    }
-  });
-
-  const handleCopyTranscript = (id: string, text: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedId(id);
-    setTimeout(() => setCopiedId(null), 2000);
-  };
-
-  const handleCopyCitation = (snippet: Snippet) => {
-    const mins = Math.floor(snippet.startTime / 60);
-    const secs = Math.floor(snippet.startTime % 60);
-    const timeFormatted = `${mins}:${secs.toString().padStart(2, '0')}`;
-    const citation = `> "${snippet.transcript.trim()}"\n\n— *${snippet.bookTitle}* by ${snippet.author} (${snippet.chapterName}, offset ${timeFormatted})`;
-    navigator.clipboard.writeText(citation);
-    setCopiedCitationId(snippet.id);
-    setTimeout(() => setCopiedCitationId(null), 2500);
-  };
-
-  const handleDownloadMarkdown = (snippet: Snippet) => {
-    const blob = new Blob([snippet.markdownContent], { type: 'text/markdown;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `${snippet.bookTitle.replace(/\s+/g, '_')}_${snippet.timestamp}.md`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-  };
-
-  const handleDownloadAudio = async (snippet: Snippet) => {
-    if (!snippet.audioUrl) return;
-    try {
-      const res = await fetch(snippet.audioUrl);
-      if (res.ok) {
-        const blob = await res.blob();
-        const blobUrl = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = blobUrl;
-        link.download = `${snippet.bookTitle.replace(/\s+/g, '_')}_${snippet.timestamp}.mp3`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(blobUrl);
-        return;
-      }
-    } catch (err) {
-      console.warn('Direct blob audio download failed, falling back to direct link:', err);
-    }
-    const link = document.createElement('a');
-    link.href = snippet.audioUrl;
-    link.download = `${snippet.bookTitle.replace(/\s+/g, '_')}_${snippet.timestamp}.mp3`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
-  // Open Expand Modal with calculated current values
-  const openExpandModal = (snippet: Snippet) => {
-    setExpandSnippet(snippet);
-    // Default pre-roll is 30s, post-roll is 30s for retry or based on snippet duration
-    setPreRoll(30);
-    const calculatedPostRoll = snippet.duration > 0 ? Math.max(15, snippet.duration - 30) : 30;
-    setPostRoll(calculatedPostRoll);
-    setExpandError(null);
-    setExpandSuccess(null);
-  };
-
-  // Immediate retry extraction with default or custom pre/post roll
-  const handleRetryExtraction = async (snippet: Snippet, customPreRoll = 30, customPostRoll = 30) => {
-    setRetryingSnippetId(snippet.id);
-    setRetryNotification(null);
-
-    try {
-      const payload = {
-        timestamp: snippet.timestamp,
-        currentTime: snippet.currentTime ?? snippet.startTime,
-        preRoll: customPreRoll,
-        postRoll: customPostRoll,
-        libraryItemId: snippet.libraryItemId,
-        bookTitle: snippet.bookTitle,
-        token: activeToken,
-        serverUrl,
-      };
-
-      let json: any = null;
-
-      try {
-        const res = await safeSidecarFetch('/api/snippet/retry', {
-          method: 'POST',
-          token: activeToken,
-          serverUrl,
-          sidecarUrl,
-          useProxy,
-          body: payload,
-        });
-        json = res.data?.data || res.data;
-      } catch (err: any) {
-        console.warn('Retry error:', err);
-      }
-
-      if (json && (json.extraction_status === 'unavailable' || json.status === 'unextractable_saved')) {
-        const reason = json.snippet?.raw_transcript || json.message || 'Source audio could not be resolved.';
-        setRetryNotification({
-          id: snippet.id,
-          type: 'error',
-          message: `Retry completed, but source audio was still unreachable: ${reason}`,
-        });
-      } else {
-        setRetryNotification({
-          id: snippet.id,
-          type: 'success',
-          message: 'Audio extracted and transcribed successfully!',
-        });
-      }
-
-      if (onRefreshSnippets) {
-        await onRefreshSnippets();
-      }
-    } catch (err: unknown) {
-      setRetryNotification({
-        id: snippet.id,
-        type: 'error',
-        message: err instanceof Error ? err.message : 'Error retrying snippet extraction',
-      });
-    } finally {
-      setRetryingSnippetId(null);
-    }
-  };
-
-  // Submit expansion to backend
-  const handleExecuteExpand = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!expandSnippet) return;
-
-    setIsExpanding(true);
-    setExpandError(null);
-    setExpandSuccess(null);
-
-    try {
-      const payload = {
-        timestamp: expandSnippet.timestamp,
-        currentTime: expandSnippet.currentTime ?? (expandSnippet.startTime + (expandSnippet.duration > 0 ? expandSnippet.duration / 2 : 0)),
-        preRoll,
-        postRoll,
-        libraryItemId: expandSnippet.libraryItemId,
-        bookTitle: expandSnippet.bookTitle,
-        token: activeToken,
-        serverUrl,
-      };
-
-      let jsonResult: any = null;
-
-      try {
-        const res = await safeSidecarFetch('/api/snippet/expand', {
-          method: 'POST',
-          token: activeToken,
-          serverUrl,
-          sidecarUrl,
-          useProxy,
-          body: payload,
-        });
-
-        jsonResult = res.data?.data || res.data;
-        if (!res.ok) {
-          throw new Error(jsonResult?.detail || jsonResult?.message || 'Failed to expand snippet');
-        }
-      } catch (primaryErr: any) {
-        throw new Error(primaryErr?.message || 'Failed to expand snippet');
-      }
-
-      if (jsonResult && (jsonResult.extraction_status === 'unavailable' || jsonResult.status === 'unextractable_saved')) {
-        setExpandError('Extraction ran, but source audio could not be resolved from Audiobookshelf.');
-        return;
-      }
-
-      setExpandSuccess('Snippet successfully updated and re-transcribed!');
-      setTimeout(() => {
-        setExpandSnippet(null);
-        setExpandSuccess(null);
-      }, 1200);
-
-      if (onRefreshSnippets) {
-        await onRefreshSnippets();
-      }
-    } catch (err: unknown) {
-      setExpandError(err instanceof Error ? err.message : 'Error updating snippet');
-    } finally {
-      setIsExpanding(false);
-    }
-  };
-
-  // Export all snippets from the book (either as a ZIP containing MP3s + MDs or as a single combined MD)
-  const handleExportBook = async (bookTitle: string, format: 'zip' | 'markdown') => {
-    setExportingBook(bookTitle);
-    setExportError(null);
-
-    try {
-      const tokenParam = activeToken ? `&token=${encodeURIComponent(activeToken)}` : '';
-      const serverParam = serverUrl ? `&server_url=${encodeURIComponent(serverUrl)}` : '';
-      const endpoint = `/api/export-book?book_title=${encodeURIComponent(bookTitle)}&format=${format}${tokenParam}${serverParam}`;
-      const headers: Record<string, string> = {};
-      if (activeToken) {
-        headers['Authorization'] = `Bearer ${activeToken}`;
-      }
-      headers['X-ABS-Server-Url'] = serverUrl;
-
-      const res = await fetch(endpoint, { headers });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: `Export failed with status ${res.status}` }));
-        throw new Error(err.detail || err.error || err.message || `Export failed with HTTP ${res.status}`);
-      }
-
-      const blob = await res.blob();
-      const ext = format === 'zip' ? 'zip' : 'md';
-      const safeName = bookTitle.replace(/[^a-zA-Z0-9_-]/g, '_');
-      const filename = `${safeName}_All_Snippets.${ext}`;
-
-      const blobUrl = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = blobUrl;
-      link.download = filename;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(blobUrl);
-    } catch (err: unknown) {
-      setExportError(err instanceof Error ? err.message : 'Failed to export book snippets');
-      setTimeout(() => setExportError(null), 5000);
-    } finally {
-      setExportingBook(null);
-    }
-  };
+  const ops = useSnippetOperations(
+    activeToken,
+    serverUrl,
+    sidecarUrl,
+    useProxy,
+    onRefreshSnippets
+  );
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
-      
-      {/* Header & Search Bar */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-neutral-800 pb-4">
-        <div>
-          <h2 className="text-base font-semibold text-white tracking-tight uppercase">
-            Saved Bookmarks & Transcripts
-          </h2>
-          <div className="flex flex-wrap items-center gap-2 mt-1">
-            <span className="text-xs text-neutral-400 font-mono">
-              {snippets.length} snippets
-            </span>
-            <button
-              onClick={() => setIsCutoffModalOpen(true)}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-neutral-900 hover:bg-neutral-850 border border-neutral-800 hover:border-neutral-650 text-[11px] text-neutral-300 hover:text-white font-mono rounded transition-colors group cursor-pointer"
-              title="Click to configure bookmark cutoff period: 'from start', 'from yyyy/mm/dd', or 'from now'"
-            >
-              <span className={`w-1.5 h-1.5 rounded-full ${
-                syncState?.cutoff_mode === 'from_start' ? 'bg-amber-400' :
-                syncState?.cutoff_mode === 'custom_date' ? 'bg-sky-400' :
-                'bg-emerald-500'
-              }`}></span>
-              <span>
-                Cutoff: {
-                  syncState?.cutoff_mode === 'from_start'
-                    ? 'From start (all bookmarks)'
-                    : syncState?.cutoff_mode === 'custom_date'
-                    ? `From ${syncState.custom_cutoff_date || 'custom date'}`
-                    : syncState?.installation_date
-                    ? `From ${syncState.installation_date} (now)`
-                    : 'From install date'
-                }
-              </span>
-              {typeof syncState?.skipped_before_cutoff === 'number' && syncState.skipped_before_cutoff > 0 && (
-                <span className="text-neutral-500 border-l border-neutral-700 pl-1.5 ml-0.5">
-                  {syncState.skipped_before_cutoff} skipped
-                </span>
-              )}
-              <Settings className="w-3 h-3 text-neutral-500 group-hover:text-neutral-300 ml-1 transition-colors" />
-            </button>
-          </div>
-        </div>
+      <SnippetsHeader
+        snippetsCount={snippets.length}
+        syncState={syncState}
+        searchTerm={searchTerm}
+        isTriggeringSync={isTriggeringSync}
+        onSearchChange={setSearchTerm}
+        onTriggerSync={onTriggerSync}
+        onNavigateToCapture={onNavigateToCapture}
+        onOpenCutoffModal={() => cutoffMgr.setIsCutoffModalOpen(true)}
+      />
 
-        <div className="flex items-center gap-3">
-          <div className="relative w-full sm:w-64">
-            <Search className="w-3.5 h-3.5 text-neutral-400 absolute left-3 top-1/2 -translate-y-1/2" />
-            <input
-              type="text"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Search transcripts or books..."
-              className="w-full bg-[#181818] border border-neutral-700 hover:border-neutral-500 focus:border-neutral-300 focus:bg-[#202020] pl-8 pr-3 py-1.5 text-xs text-white placeholder-neutral-500 focus:outline-none transition-colors font-mono"
-            />
-          </div>
-
-          {onTriggerSync && (
-            <button
-              onClick={onTriggerSync}
-              disabled={isTriggeringSync || syncState?.is_syncing}
-              className="px-2.5 py-1.5 border border-neutral-700 bg-[#161616] hover:bg-[#222222] hover:border-neutral-500 text-xs text-neutral-200 transition-colors flex items-center gap-1.5 disabled:opacity-50"
-              title="Sync bookmarks from server"
-            >
-              <RotateCw className={`w-3.5 h-3.5 ${isTriggeringSync || syncState?.is_syncing ? 'animate-spin' : ''}`} />
-              <span className="hidden sm:inline">Sync Server</span>
-            </button>
-          )}
-
-          <button
-            onClick={onNavigateToCapture}
-            className="px-3 py-1.5 bg-neutral-100 text-black hover:bg-white text-xs font-semibold flex items-center gap-1.5 shrink-0 transition-colors"
-          >
-            <BookmarkPlus className="w-3.5 h-3.5" />
-            <span>New Snippet</span>
-          </button>
-        </div>
-      </div>
-
-      {exportError && (
+      {ops.exportError && (
         <div className="p-3 bg-neutral-950 border border-red-800 text-[11px] text-red-400 flex items-center gap-1.5">
           <AlertTriangle className="w-3.5 h-3.5" />
-          <span>{exportError}</span>
+          <span>{ops.exportError}</span>
         </div>
       )}
 
-      {syncState?.is_syncing && (
-        <div className="p-2.5 bg-[#141414] border border-neutral-800 text-xs text-neutral-300 flex items-center justify-between gap-2 font-mono">
-          <div className="flex items-center gap-2">
-            <RotateCw className="w-3.5 h-3.5 text-emerald-400 animate-spin" />
-            <span>Syncing bookmarks created on or after {syncState?.installation_date ? `${syncState.installation_date} 00:00` : 'installation'}...</span>
-            {syncState?.current_item && (
-              <span className="text-neutral-400 truncate max-w-xs">{syncState.current_item}</span>
-            )}
-          </div>
-          {typeof syncState?.skipped_before_cutoff === 'number' && syncState.skipped_before_cutoff > 0 && (
-            <span className="text-[11px] text-neutral-500 shrink-0">
-              {syncState.skipped_before_cutoff} older bookmarks skipped
-            </span>
-          )}
-        </div>
+      <SyncStatusBanner syncState={syncState} />
+
+      <SnippetSortBar
+        sortField={sorting.sortField}
+        sortDirection={sorting.sortDirection}
+        sortedCount={sortedSnippets.length}
+        onSelectDateSort={sorting.handleSelectDateSort}
+        onSelectBookSort={sorting.handleSelectBookSort}
+        onToggleDirection={sorting.handleToggleDirection}
+      />
+
+      <BookFilterBar
+        uniqueBooks={uniqueBooks}
+        matchingBooks={matchingBooks}
+        snippets={snippets}
+        selectedBookFilter={selectedBookFilter}
+        bookFilterQuery={bookFilterQuery}
+        isBookDropdownOpen={isBookDropdownOpen}
+        bookDropdownRef={bookDropdownRef}
+        onSelectBook={setSelectedBookFilter}
+        onFilterQueryChange={setBookFilterQuery}
+        onSetDropdownOpen={setIsBookDropdownOpen}
+        onClearFilter={() => {
+          setSelectedBookFilter(null);
+          setBookFilterQuery('');
+          setIsBookDropdownOpen(false);
+        }}
+      />
+
+      <SnippetList
+        snippets={sortedSnippets}
+        user={user}
+        hasFilterActive={Boolean(searchTerm || selectedBookFilter)}
+        copiedId={ops.copiedId}
+        copiedCitationId={ops.copiedCitationId}
+        retryingSnippetId={ops.retryingSnippetId}
+        retryNotification={ops.retryNotification}
+        exportingBook={ops.exportingBook}
+        openExportDropdownId={ops.openExportDropdownId}
+        onNavigateToCapture={onNavigateToCapture}
+        onDeleteSnippet={onDeleteSnippet}
+        onCopyCitation={ops.handleCopyCitation}
+        onCopyTranscript={ops.handleCopyTranscript}
+        onDownloadAudio={ops.handleDownloadAudio}
+        onDownloadMarkdown={ops.handleDownloadMarkdown}
+        onRetryExtraction={ops.handleRetryExtraction}
+        onOpenExpandModal={ops.openExpandModal}
+        onDismissRetryNotification={() => ops.setRetryNotification(null)}
+        onToggleExportDropdown={(id) => {
+          ops.setOpenExportDropdownId(ops.openExportDropdownId === id ? null : id);
+        }}
+        onExportBook={ops.handleExportBook}
+      />
+
+      {ops.expandSnippet && (
+        <ExpandSnippetModal
+          expandSnippet={ops.expandSnippet}
+          preRoll={ops.preRoll}
+          postRoll={ops.postRoll}
+          isExpanding={ops.isExpanding}
+          expandError={ops.expandError}
+          expandSuccess={ops.expandSuccess}
+          setPreRoll={ops.setPreRoll}
+          setPostRoll={ops.setPostRoll}
+          onClose={() => !ops.isExpanding && ops.setExpandSnippet(null)}
+          onSubmit={ops.handleExecuteExpand}
+        />
       )}
 
-      {/* Sorting & Filter Controls Bar */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-neutral-800 pb-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs text-neutral-400 font-mono flex items-center gap-1.5 mr-1">
-            <ArrowUpDown className="w-3.5 h-3.5 text-neutral-400" />
-            <span>Sort:</span>
-          </span>
-
-          <div className="inline-flex border border-neutral-700 bg-[#121212]">
-            <button
-              onClick={() => {
-                if (sortField === 'date') {
-                  setSortDirection((prev) => (prev === 'desc' ? 'asc' : 'desc'));
-                } else {
-                  setSortField('date');
-                  setSortDirection('desc');
-                }
-              }}
-              className={`px-3 py-1 text-xs font-mono flex items-center gap-1.5 transition-colors ${
-                sortField === 'date'
-                  ? 'bg-neutral-200 text-black font-semibold'
-                  : 'text-neutral-300 hover:text-white hover:bg-[#1a1a1a]'
-              }`}
-              title="Sort by Date (click to toggle ascending/descending)"
-            >
-              <Calendar className="w-3.5 h-3.5" />
-              <span>Date</span>
-              {sortField === 'date' && (
-                <span className="text-[10px] ml-0.5 opacity-75">
-                  ({sortDirection === 'desc' ? 'Newest' : 'Oldest'})
-                </span>
-              )}
-            </button>
-
-            <button
-              onClick={() => {
-                if (sortField === 'book') {
-                  setSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'));
-                } else {
-                  setSortField('book');
-                  setSortDirection('asc');
-                }
-              }}
-              className={`px-3 py-1 text-xs font-mono flex items-center gap-1.5 transition-colors border-l border-neutral-700 ${
-                sortField === 'book'
-                  ? 'bg-neutral-200 text-black font-semibold'
-                  : 'text-neutral-300 hover:text-white hover:bg-[#1a1a1a]'
-              }`}
-              title="Sort by Book Title (click to toggle A-Z / Z-A)"
-            >
-              <BookOpen className="w-3.5 h-3.5" />
-              <span>Book</span>
-              {sortField === 'book' && (
-                <span className="text-[10px] ml-0.5 opacity-75">
-                  ({sortDirection === 'asc' ? 'A→Z' : 'Z→A'})
-                </span>
-              )}
-            </button>
-          </div>
-
-          <button
-            onClick={() => setSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'))}
-            className="px-2.5 py-1 text-xs font-mono border border-neutral-700 bg-[#141414] hover:border-neutral-500 text-neutral-300 hover:text-white transition-colors flex items-center gap-1.5"
-            title={`Current order: ${sortDirection === 'asc' ? 'Ascending' : 'Descending'}. Click to reverse.`}
-          >
-            {sortDirection === 'asc' ? (
-              <>
-                <ArrowUp className="w-3.5 h-3.5 text-neutral-200" />
-                <span>Ascending</span>
-              </>
-            ) : (
-              <>
-                <ArrowDown className="w-3.5 h-3.5 text-neutral-200" />
-                <span>Descending</span>
-              </>
-            )}
-          </button>
-        </div>
-
-        <div className="text-xs text-neutral-400 font-mono">
-          Showing {sortedSnippets.length} {sortedSnippets.length === 1 ? 'snippet' : 'snippets'}
-        </div>
-      </div>
-
-      {/* Compact Book Filter Bar (Type book name or All Books to clear) */}
-      {uniqueBooks.length > 0 && (
-        <div className="flex flex-wrap items-center gap-3 pt-1 pb-1">
-          {/* All Books Button (Clears filter) */}
-          <button
-            id="snippets-all-books-filter-btn"
-            onClick={() => {
-              setSelectedBookFilter(null);
-              setBookFilterQuery('');
-              setIsBookDropdownOpen(false);
-            }}
-            className={`px-3 py-1.5 text-xs font-mono transition-colors border flex items-center gap-1.5 shrink-0 ${
-              !selectedBookFilter && !bookFilterQuery.trim()
-                ? 'bg-neutral-200 text-black border-neutral-200 font-semibold shadow-sm'
-                : 'bg-[#141414] text-neutral-300 border-neutral-700 hover:border-neutral-500 hover:text-white cursor-pointer'
-            }`}
-            title={`Show all snippets across all ${uniqueBooks.length} books`}
-          >
-            <span>All Books</span>
-            <span
-              className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${
-                !selectedBookFilter && !bookFilterQuery.trim()
-                  ? 'bg-neutral-300 text-black'
-                  : 'bg-neutral-800 text-neutral-400'
-              }`}
-            >
-              {uniqueBooks.length}
-            </span>
-          </button>
-
-          {/* Type Book Name Input & Dropdown */}
-          <div ref={bookDropdownRef} className="relative flex-1 min-w-[220px] max-w-md">
-            <div className="relative flex items-center">
-              <BookOpen className="absolute left-2.5 w-3.5 h-3.5 text-neutral-400 pointer-events-none" />
-              <input
-                id="snippets-book-name-filter-input"
-                type="text"
-                placeholder={
-                  selectedBookFilter
-                    ? `Filtering: ${selectedBookFilter}`
-                    : `Type book name to filter (${uniqueBooks.length} books)...`
-                }
-                value={selectedBookFilter ? selectedBookFilter : bookFilterQuery}
-                onChange={(e) => {
-                  setSelectedBookFilter(null);
-                  setBookFilterQuery(e.target.value);
-                  setIsBookDropdownOpen(true);
-                }}
-                onFocus={() => setIsBookDropdownOpen(true)}
-                className={`w-full bg-[#121212] border text-xs text-white pl-8 pr-8 py-1.5 focus:outline-none transition-colors font-mono ${
-                  selectedBookFilter || bookFilterQuery.trim()
-                    ? 'border-neutral-400 bg-[#171717]'
-                    : 'border-neutral-700 hover:border-neutral-500 focus:border-neutral-400'
-                }`}
-              />
-              {(selectedBookFilter || bookFilterQuery) && (
-                <button
-                  id="snippets-clear-book-filter-btn"
-                  onClick={() => {
-                    setSelectedBookFilter(null);
-                    setBookFilterQuery('');
-                    setIsBookDropdownOpen(false);
-                  }}
-                  className="absolute right-2 p-0.5 text-neutral-400 hover:text-white hover:bg-neutral-800 rounded transition-colors"
-                  title="Clear book filter"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              )}
-            </div>
-
-            {/* Interactive Matching Books Dropdown */}
-            {isBookDropdownOpen && matchingBooks.length > 0 && (
-              <div className="absolute left-0 right-0 top-full mt-1 max-h-60 overflow-y-auto bg-[#141414] border border-neutral-700 shadow-2xl z-50 py-1 font-mono text-xs">
-                <div className="px-3 py-1 text-[10px] uppercase tracking-wider text-neutral-400 border-b border-neutral-800/80 flex justify-between items-center">
-                  <span>Matching Books ({matchingBooks.length})</span>
-                  <span className="text-[10px] text-neutral-500">Click to filter</span>
-                </div>
-                {matchingBooks.map((bTitle) => {
-                  const count = snippets.filter((s) => s.bookTitle === bTitle).length;
-                  const isSelected = selectedBookFilter === bTitle;
-                  return (
-                    <button
-                      key={bTitle}
-                      type="button"
-                      onClick={() => {
-                        setSelectedBookFilter(bTitle);
-                        setBookFilterQuery('');
-                        setIsBookDropdownOpen(false);
-                      }}
-                      className={`w-full text-left px-3 py-1.5 flex items-center justify-between gap-2 border-b border-neutral-800/40 last:border-none transition-colors ${
-                        isSelected
-                          ? 'bg-neutral-800 text-white font-medium'
-                          : 'text-neutral-300 hover:bg-[#202020] hover:text-white'
-                      }`}
-                    >
-                      <span className="truncate">{bTitle}</span>
-                      <span className="text-[10px] text-neutral-400 bg-neutral-800 px-1.5 py-0.5 shrink-0">
-                        {count}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          {/* Active Filter Indicator Tag */}
-          {(selectedBookFilter || bookFilterQuery.trim()) && (
-            <div className="flex items-center gap-1.5 text-xs text-neutral-300 font-mono bg-[#181818] border border-neutral-700 px-2.5 py-1">
-              <span className="text-neutral-400 text-[11px]">Filtered:</span>
-              <span className="text-white font-semibold truncate max-w-[200px]">
-                {selectedBookFilter || bookFilterQuery}
-              </span>
-              <button
-                onClick={() => {
-                  setSelectedBookFilter(null);
-                  setBookFilterQuery('');
-                  setIsBookDropdownOpen(false);
-                }}
-                className="ml-1 text-neutral-400 hover:text-white transition-colors"
-                title="Clear filter"
-              >
-                <X className="w-3 h-3" />
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Snippet List */}
-      {sortedSnippets.length === 0 ? (
-        <div className="border border-neutral-700 bg-[#0d0d0d] p-12 text-center space-y-4">
-          <div className="text-neutral-400 text-sm font-mono">
-            {searchTerm || selectedBookFilter ? 'No matching snippets found.' : 'No snippets captured yet.'}
-          </div>
-          <button
-            onClick={onNavigateToCapture}
-            className="px-4 py-2 border border-neutral-700 bg-[#161616] text-xs text-neutral-200 hover:text-white hover:border-neutral-500 transition-colors"
-          >
-            Go to Capture Screen →
-          </button>
-        </div>
-      ) : (
-        <div className="space-y-4">
-          {sortedSnippets.map((snippet) => {
-            const isAudioAvailable = Boolean(snippet.audioUrl && snippet.duration > 0 && snippet.extractionStatus !== 'unavailable');
-
-            return (
-              <article
-                key={snippet.id}
-                className="border border-neutral-700 bg-[#0d0d0d] p-5 space-y-4"
-              >
-                {/* Snippet Header */}
-                <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-2 border-b border-neutral-800 pb-3">
-                  <div>
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <h3 className="text-sm font-semibold text-white">
-                        {snippet.bookTitle || 'Unknown Book'}
-                      </h3>
-                      {!isAudioAvailable && (
-                        <span className="text-[10px] text-amber-300 bg-amber-950/80 px-2 py-0.5 border border-amber-800/80 font-mono flex items-center gap-1">
-                          <AlertTriangle className="w-3 h-3 text-amber-400" />
-                          <span>Audio Unavailable</span>
-                        </span>
-                      )}
-                    </div>
-                    <div className="text-xs text-neutral-400 mt-0.5 flex flex-wrap items-center gap-2">
-                      <span>{snippet.author || 'N/A'}</span>
-                      <span>•</span>
-                      <span>{snippet.chapterName || 'N/A'}</span>
-                      <span className="text-[10px] text-neutral-400 bg-neutral-800 px-1.5 py-0.5 border border-neutral-700">
-                        @{snippet.username || user?.username || 'user'}
-                      </span>
-                      <span className="text-[10px] text-neutral-500 hidden sm:inline font-mono">
-                        {snippet.username || user?.username || 'user'}/bookmarks/
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-3 text-xs text-neutral-400 font-mono self-end sm:self-auto">
-                    <span>Start: {isAudioAvailable ? `${Math.round(snippet.startTime)}s` : (snippet.startTime > 0 ? `${Math.round(snippet.startTime)}s` : 'N/A')}</span>
-                    <span>Duration: {isAudioAvailable ? `${snippet.duration}s` : 'N/A'}</span>
-                    <span>{new Date(snippet.createdAt).toLocaleDateString()}</span>
-                  </div>
-                </div>
-
-                {/* Audio Player or Unavailable Banner */}
-                {isAudioAvailable ? (
-                  <div className="bg-[#141414] p-2.5 border border-neutral-700">
-                    <audio
-                      key={`${snippet.id}-${snippet.duration}-${snippet.audioUrl}`}
-                      controls
-                      preload="metadata"
-                      src={snippet.audioUrl}
-                      className="w-full h-8 bg-[#181818]"
-                    />
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    <div className="bg-[#141414] p-3 border border-amber-900/60 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                      <div className="flex items-start sm:items-center gap-2 text-xs text-amber-300 font-mono">
-                        <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5 sm:mt-0" />
-                        <span>Bookmark recorded, but audio could not be extracted (source file moved, unmounted, or slow response).</span>
-                      </div>
-                      <div className="flex items-center gap-2 shrink-0 self-start sm:self-auto flex-wrap">
-                        <button
-                          onClick={() => handleRetryExtraction(snippet)}
-                          disabled={retryingSnippetId === snippet.id}
-                          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-amber-500 hover:bg-amber-400 text-black border border-amber-400 transition-colors disabled:opacity-50"
-                          title="Retry snipping and extracting audio for this bookmark"
-                        >
-                          <RotateCw className={`w-3.5 h-3.5 ${retryingSnippetId === snippet.id ? 'animate-spin' : ''}`} />
-                          <span>{retryingSnippetId === snippet.id ? 'Retrying Snipping...' : 'Retry Snipping'}</span>
-                        </button>
-                        <button
-                          onClick={() => openExpandModal(snippet)}
-                          disabled={retryingSnippetId === snippet.id}
-                          className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-mono bg-neutral-900 hover:bg-neutral-800 text-amber-300 border border-amber-800/80 transition-colors disabled:opacity-50"
-                          title="Set custom pre-roll and post-roll timestamps and retry extraction"
-                        >
-                          <Sliders className="w-3.5 h-3.5 text-amber-400" />
-                          <span>Adjust & Retry</span>
-                        </button>
-                      </div>
-                    </div>
-
-                    {retryNotification && retryNotification.id === snippet.id && (
-                      <div className={`p-2.5 text-xs font-mono border flex items-center justify-between gap-2 ${
-                        retryNotification.type === 'success'
-                          ? 'bg-emerald-950/60 border-emerald-700 text-emerald-200'
-                          : 'bg-red-950/60 border-red-700 text-red-200'
-                      }`}>
-                        <span>{retryNotification.message}</span>
-                        <button
-                          onClick={() => setRetryNotification(null)}
-                          className="text-neutral-400 hover:text-white px-1"
-                        >
-                          ✕
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Transcript Text Box */}
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between text-xs text-neutral-400">
-                    <span className="font-mono text-[11px] uppercase">
-                      {isAudioAvailable ? 'Whisper Transcript' : 'Bookmark Details & Status'}
-                    </span>
-                    <div className="flex items-center gap-3">
-                      {isAudioAvailable && (
-                        <button
-                          onClick={() => handleCopyCitation(snippet)}
-                          title="Copy formatted quote citation with book title, author, and timestamp"
-                          className="flex items-center gap-1 text-neutral-400 hover:text-white transition-colors text-[11px]"
-                        >
-                          {copiedCitationId === snippet.id ? (
-                            <>
-                              <Check className="w-3.5 h-3.5 text-emerald-400" />
-                              <span className="text-emerald-400">Citation Copied</span>
-                            </>
-                          ) : (
-                            <>
-                              <Copy className="w-3.5 h-3.5" />
-                              <span>Cite / Quote</span>
-                            </>
-                          )}
-                        </button>
-                      )}
-                      <button
-                        onClick={() => handleCopyTranscript(snippet.id, snippet.transcript)}
-                        className="flex items-center gap-1 text-neutral-300 hover:text-white transition-colors"
-                      >
-                        {copiedId === snippet.id ? (
-                          <>
-                            <Check className="w-3.5 h-3.5 text-white" />
-                            <span>Copied</span>
-                          </>
-                        ) : (
-                          <>
-                            <Copy className="w-3.5 h-3.5" />
-                            <span>Copy Text</span>
-                          </>
-                        )}
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="p-3 bg-[#151515] border border-neutral-700 text-xs text-neutral-200 leading-relaxed font-mono whitespace-pre-wrap">
-                    {snippet.transcript || 'No text or transcript available.'}
-                  </div>
-                </div>
-
-                {/* Action Toolbar */}
-                <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-neutral-800 text-xs">
-                  <div className="flex flex-wrap items-center gap-2">
-                    {isAudioAvailable ? (
-                      <button
-                        onClick={() => handleDownloadAudio(snippet)}
-                        className="flex items-center gap-1.5 px-3 py-1.5 border border-neutral-700 bg-[#161616] hover:border-neutral-500 text-neutral-200 hover:text-white transition-colors"
-                      >
-                        <FileAudio className="w-3.5 h-3.5" />
-                        <span>Download .MP3</span>
-                      </button>
-                    ) : (
-                      <div
-                        className="flex items-center gap-1.5 px-3 py-1.5 border border-neutral-800 bg-[#141414] text-neutral-500 cursor-not-allowed opacity-50 font-mono"
-                        title="MP3 is not available for unextracted bookmark"
-                      >
-                        <FileAudio className="w-3.5 h-3.5" />
-                        <span>No .MP3 (N/A)</span>
-                      </div>
-                    )}
-
-                    <button
-                      onClick={() => handleDownloadMarkdown(snippet)}
-                      className="flex items-center gap-1.5 px-3 py-1.5 border border-neutral-700 bg-[#161616] hover:border-neutral-500 text-neutral-200 hover:text-white transition-colors"
-                    >
-                      <FileText className="w-3.5 h-3.5" />
-                      <span>Download .MD</span>
-                    </button>
-
-                    {/* Expand / Adjust Snippet Context Button */}
-                    {isAudioAvailable ? (
-                      <button
-                        onClick={() => openExpandModal(snippet)}
-                        className="flex items-center gap-1.5 px-3 py-1.5 border border-neutral-700 bg-[#1a1a1a] hover:border-neutral-400 text-neutral-100 hover:text-white transition-colors"
-                        title="Adjust pre-roll & post-roll to expand snippet context"
-                      >
-                        <Sliders className="w-3.5 h-3.5 text-neutral-300" />
-                        <span>Adjust Duration / Context</span>
-                      </button>
-                    ) : (
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => handleRetryExtraction(snippet)}
-                          disabled={retryingSnippetId === snippet.id}
-                          className="flex items-center gap-1.5 px-3 py-1.5 border border-amber-600 bg-amber-950/70 hover:bg-amber-900/90 text-amber-200 hover:text-white font-mono text-xs transition-colors disabled:opacity-50"
-                          title="Retry extracting audio for this bookmark"
-                        >
-                          <RotateCw className={`w-3.5 h-3.5 text-amber-400 ${retryingSnippetId === snippet.id ? 'animate-spin' : ''}`} />
-                          <span>{retryingSnippetId === snippet.id ? 'Retrying...' : 'Retry Snipping'}</span>
-                        </button>
-                        <button
-                          onClick={() => openExpandModal(snippet)}
-                          disabled={retryingSnippetId === snippet.id}
-                          className="flex items-center gap-1.5 px-3 py-1.5 border border-neutral-700 bg-[#161616] hover:border-amber-500 text-neutral-300 hover:text-white font-mono text-xs transition-colors"
-                          title="Adjust pre-roll and post-roll timestamps and retry extraction"
-                        >
-                          <Sliders className="w-3.5 h-3.5 text-amber-400" />
-                          <span>Adjust & Retry</span>
-                        </button>
-                      </div>
-                    )}
-
-                    {/* Export all from this book Dropdown */}
-                    <div className="relative">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setOpenExportDropdownId(openExportDropdownId === snippet.id ? null : snippet.id);
-                        }}
-                        disabled={exportingBook === snippet.bookTitle}
-                        className="flex items-center gap-1.5 px-3 py-1.5 border border-neutral-700 bg-[#161616] hover:border-neutral-400 text-neutral-200 hover:text-white transition-colors disabled:opacity-50"
-                        title="Export all snippets from this book"
-                      >
-                        <Archive className="w-3.5 h-3.5 text-neutral-300" />
-                        <span>
-                          {exportingBook === snippet.bookTitle ? 'Exporting Book...' : 'Export all from this book'}
-                        </span>
-                        <ChevronDown
-                          className={`w-3 h-3 text-neutral-400 transition-transform ${
-                            openExportDropdownId === snippet.id ? 'rotate-180' : ''
-                          }`}
-                        />
-                      </button>
-
-                      {openExportDropdownId === snippet.id && (
-                        <div
-                          className="absolute left-0 mt-1 w-52 bg-[#181818] border border-neutral-700 shadow-xl z-20 font-mono py-1"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <div className="px-3 py-1.5 text-[10px] text-neutral-400 border-b border-neutral-800 uppercase tracking-wider truncate">
-                            {snippet.bookTitle}
-                          </div>
-                          <button
-                            onClick={() => {
-                              setOpenExportDropdownId(null);
-                              handleExportBook(snippet.bookTitle, 'zip');
-                            }}
-                            className="w-full text-left px-3 py-2 text-xs text-neutral-200 hover:text-white hover:bg-[#222222] flex items-center justify-between transition-colors"
-                          >
-                            <span className="flex items-center gap-2">
-                              <Archive className="w-3.5 h-3.5 text-neutral-400" />
-                              <span>As Zip</span>
-                            </span>
-                            <span className="text-[10px] text-neutral-500 font-mono">.zip</span>
-                          </button>
-                          <button
-                            onClick={() => {
-                              setOpenExportDropdownId(null);
-                              handleExportBook(snippet.bookTitle, 'markdown');
-                            }}
-                            className="w-full text-left px-3 py-2 text-xs text-neutral-200 hover:text-white hover:bg-[#222222] flex items-center justify-between transition-colors border-t border-neutral-800/60"
-                          >
-                            <span className="flex items-center gap-2">
-                              <FileText className="w-3.5 h-3.5 text-neutral-400" />
-                              <span>As .MD</span>
-                            </span>
-                            <span className="text-[10px] text-neutral-500 font-mono">.md</span>
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-3">
-                    <button
-                      id={`snippet-delete-btn-${snippet.id}`}
-                      onClick={() => onDeleteSnippet(snippet.id, snippet)}
-                      className="text-neutral-400 hover:text-red-400 flex items-center gap-1 transition-colors"
-                      title="Delete snippet permanently"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                      <span>Delete</span>
-                    </button>
-                  </div>
-                </div>
-              </article>
-            );
-          })}
-        </div>
-      )}
-
-      {/* Expand / Adjust Snippet Duration Modal */}
-      {expandSnippet && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#0e0e0e] border border-neutral-700 w-full max-w-md p-5 space-y-4 font-mono shadow-2xl relative">
-            
-            {/* Modal Header */}
-            <div className="flex items-start justify-between border-b border-neutral-800 pb-3">
-              <div>
-                <h3 className="text-sm font-semibold text-white uppercase tracking-tight flex items-center gap-2">
-                  {(!expandSnippet.audioUrl || expandSnippet.extractionStatus === 'unavailable' || expandSnippet.duration <= 0) ? (
-                    <>
-                      <RotateCw className="w-4 h-4 text-amber-400" />
-                      <span>Retry Snipping & Extract Audio</span>
-                    </>
-                  ) : (
-                    <>
-                      <Sliders className="w-4 h-4 text-neutral-300" />
-                      <span>Expand Snippet Context</span>
-                    </>
-                  )}
-                </h3>
-                <p className="text-xs text-neutral-400 mt-1 truncate max-w-xs">
-                  {expandSnippet.bookTitle}
-                </p>
-                {(!expandSnippet.audioUrl || expandSnippet.extractionStatus === 'unavailable' || expandSnippet.duration <= 0) && (
-                  <p className="text-[11px] text-amber-300/80 mt-1">
-                    Set pre-roll and post-roll timestamps around the bookmark anchor to retry extraction.
-                  </p>
-                )}
-              </div>
-              <button
-                onClick={() => !isExpanding && setExpandSnippet(null)}
-                className="text-neutral-400 hover:text-white p-1"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            {/* Adjustment Form */}
-            <form onSubmit={handleExecuteExpand} className="space-y-4 text-xs">
-              <div>
-                <label className="block text-neutral-300 mb-1.5">
-                  Pre-Roll: <span className="text-white font-semibold">{preRoll}s</span> before bookmark anchor
-                </label>
-                <div className="flex items-center gap-3">
-                  <input
-                    type="range"
-                    min="5"
-                    max="180"
-                    step="5"
-                    value={preRoll}
-                    onChange={(e) => setPreRoll(Number(e.target.value))}
-                    className="w-full accent-neutral-200 cursor-pointer"
-                  />
-                  <input
-                    type="number"
-                    min="5"
-                    max="300"
-                    value={preRoll}
-                    onChange={(e) => setPreRoll(Math.max(5, Number(e.target.value)))}
-                    className="w-16 bg-[#161616] border border-neutral-700 px-2 py-1 text-white text-center"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-neutral-300 mb-1.5">
-                  Post-Roll: <span className="text-white font-semibold">{postRoll}s</span> after bookmark anchor
-                </label>
-                <div className="flex items-center gap-3">
-                  <input
-                    type="range"
-                    min="10"
-                    max="300"
-                    step="5"
-                    value={postRoll}
-                    onChange={(e) => setPostRoll(Number(e.target.value))}
-                    className="w-full accent-neutral-200 cursor-pointer"
-                  />
-                  <input
-                    type="number"
-                    min="10"
-                    max="600"
-                    value={postRoll}
-                    onChange={(e) => setPostRoll(Math.max(10, Number(e.target.value)))}
-                    className="w-16 bg-[#161616] border border-neutral-700 px-2 py-1 text-white text-center"
-                  />
-                </div>
-              </div>
-
-              {/* Total Calculation Display */}
-              <div className="p-2.5 bg-[#141414] border border-neutral-800 flex items-center justify-between text-[11px]">
-                <span className="text-neutral-400">Total New Snippet Duration:</span>
-                <span className="text-white font-semibold font-mono">
-                  {preRoll + postRoll} seconds ({(preRoll + postRoll) / 60 >= 1 ? `${((preRoll + postRoll) / 60).toFixed(1)} min` : ''})
-                </span>
-              </div>
-
-              {expandError && (
-                <div className="p-2.5 bg-red-950/40 border border-red-800 text-red-300 text-xs">
-                  {expandError}
-                </div>
-              )}
-
-              {expandSuccess && (
-                <div className="p-2.5 bg-emerald-950/40 border border-emerald-800 text-emerald-300 text-xs">
-                  {expandSuccess}
-                </div>
-              )}
-
-              {/* Action Buttons */}
-              <div className="pt-3 border-t border-neutral-800 flex items-center justify-end gap-2.5">
-                <button
-                  type="button"
-                  onClick={() => setExpandSnippet(null)}
-                  disabled={isExpanding}
-                  className="px-3 py-1.5 border border-neutral-700 hover:border-neutral-500 text-neutral-300 hover:text-white transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={isExpanding}
-                  className="px-4 py-1.5 bg-neutral-100 text-black hover:bg-white font-semibold flex items-center gap-2 transition-colors disabled:opacity-50"
-                >
-                  {isExpanding ? (
-                    <>
-                      <RotateCw className="w-3.5 h-3.5 animate-spin" />
-                      <span>Re-clipping & Transcribing...</span>
-                    </>
-                  ) : (!expandSnippet.audioUrl || expandSnippet.extractionStatus === 'unavailable' || expandSnippet.duration <= 0) ? (
-                    <>
-                      <RotateCw className="w-3.5 h-3.5" />
-                      <span>Retry Extraction & Transcribe</span>
-                    </>
-                  ) : (
-                    <>
-                      <Sliders className="w-3.5 h-3.5" />
-                      <span>Update & Replace Snippet</span>
-                    </>
-                  )}
-                </button>
-              </div>
-            </form>
-
-          </div>
-        </div>
-      )}
-
-      {/* Admin Bookmark Cutoff Period Configuration Modal */}
-      {isCutoffModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
-          <div className="bg-[#121212] border border-neutral-800 max-w-md w-full p-6 text-xs text-neutral-200 font-mono shadow-2xl relative">
-            
-            <div className="flex items-center justify-between border-b border-neutral-800 pb-3 mb-4">
-              <div className="flex items-center gap-2">
-                <Settings className="w-4 h-4 text-emerald-400" />
-                <h3 className="font-semibold text-white uppercase text-sm">
-                  Bookmark Cutoff Period
-                </h3>
-              </div>
-              <button
-                onClick={() => setIsCutoffModalOpen(false)}
-                className="text-neutral-400 hover:text-white p-1"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <p className="text-neutral-400 mb-4 text-[11px] leading-relaxed">
-              Configure which historical Audiobookshelf bookmarks are processed. Only bookmarks created within this period will be transcribed and clipped.
-            </p>
-
-            {cutoffSaveError && (
-              <div className="p-2.5 mb-3 bg-red-950/40 border border-red-800 text-red-400 flex items-center gap-2 text-[11px]">
-                <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-                <span>{cutoffSaveError}</span>
-              </div>
-            )}
-
-            {cutoffSaveSuccess && (
-              <div className="p-2.5 mb-3 bg-emerald-950/40 border border-emerald-800 text-emerald-300 flex items-center gap-2 text-[11px]">
-                <Check className="w-3.5 h-3.5 shrink-0" />
-                <span>{cutoffSaveSuccess}</span>
-              </div>
-            )}
-
-            <form onSubmit={handleSaveCutoffConfig} className="space-y-4">
-              <div className="space-y-2.5">
-
-                {/* Option 1: From Start */}
-                <label
-                  className={`flex items-start gap-3 p-3 border cursor-pointer transition-colors ${
-                    selectedCutoffMode === 'from_start'
-                      ? 'border-neutral-200 bg-neutral-900/90 text-white'
-                      : 'border-neutral-800 bg-[#161616] text-neutral-300 hover:border-neutral-700'
-                  }`}
-                >
-                  <input
-                    type="radio"
-                    name="cutoff_mode"
-                    value="from_start"
-                    checked={selectedCutoffMode === 'from_start'}
-                    onChange={() => setSelectedCutoffMode('from_start')}
-                    className="mt-0.5 text-neutral-100 focus:ring-0"
-                  />
-                  <div className="space-y-0.5">
-                    <div className="font-semibold flex items-center gap-1.5">
-                      <Clock className="w-3 h-3 text-amber-400" />
-                      <span>From start</span>
-                    </div>
-                    <div className="text-[11px] text-neutral-400">
-                      Process all bookmarks from the beginning of the server.
-                    </div>
-                  </div>
-                </label>
-
-                {/* Option 2: From Custom Date (YYYY/MM/DD) */}
-                <label
-                  className={`flex items-start gap-3 p-3 border cursor-pointer transition-colors ${
-                    selectedCutoffMode === 'custom_date'
-                      ? 'border-neutral-200 bg-neutral-900/90 text-white'
-                      : 'border-neutral-800 bg-[#161616] text-neutral-300 hover:border-neutral-700'
-                  }`}
-                >
-                  <input
-                    type="radio"
-                    name="cutoff_mode"
-                    value="custom_date"
-                    checked={selectedCutoffMode === 'custom_date'}
-                    onChange={() => setSelectedCutoffMode('custom_date')}
-                    className="mt-0.5 text-neutral-100 focus:ring-0"
-                  />
-                  <div className="space-y-2 flex-1">
-                    <div className="font-semibold flex items-center gap-1.5">
-                      <Calendar className="w-3 h-3 text-sky-400" />
-                      <span>From yyyy/mm/dd</span>
-                    </div>
-                    <div className="text-[11px] text-neutral-400">
-                      Only process bookmarks created on or after this specific date at 00:00.
-                    </div>
-
-                    {selectedCutoffMode === 'custom_date' && (
-                      <div className="pt-1">
-                        <div className="relative flex items-center">
-                          <input
-                            type="text"
-                            value={customDateInput}
-                            onChange={(e) => setCustomDateInput(e.target.value)}
-                            placeholder="yyyy/mm/dd"
-                            className="w-full bg-[#1e1e1e] border border-neutral-700 focus:border-neutral-300 text-white px-2.5 py-1.5 text-xs font-mono outline-none pr-9 tracking-wider"
-                          />
-                          <input
-                            type="date"
-                            ref={nativeDatePickerRef}
-                            className="sr-only"
-                            tabIndex={-1}
-                            value={normalizeToIsoDate(customDateInput)}
-                            max={new Date().toISOString().slice(0, 10)}
-                            onChange={(e) => {
-                              if (e.target.value) {
-                                setCustomDateInput(formatToSlashDate(e.target.value));
-                              }
-                            }}
-                          />
-                          <button
-                            type="button"
-                            onClick={() => {
-                              try {
-                                nativeDatePickerRef.current?.showPicker();
-                              } catch {
-                                nativeDatePickerRef.current?.focus();
-                              }
-                            }}
-                            className="absolute right-2 p-1 text-neutral-400 hover:text-white transition-colors"
-                            title="Open calendar picker"
-                          >
-                            <Calendar className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                        <div className="flex items-center justify-between text-[10px] text-neutral-400 mt-1 px-0.5">
-                          <span>Format: <strong className="text-neutral-300 font-mono">yyyy/mm/dd</strong> or <strong className="text-neutral-300 font-mono">yy/mm/dd</strong></span>
-                          <span className="text-neutral-500">Pick from calendar or type</span>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </label>
-
-                {/* Option 3: From Now (Installation Date) */}
-                <label
-                  className={`flex items-start gap-3 p-3 border cursor-pointer transition-colors ${
-                    selectedCutoffMode === 'from_now'
-                      ? 'border-neutral-200 bg-neutral-900/90 text-white'
-                      : 'border-neutral-800 bg-[#161616] text-neutral-300 hover:border-neutral-700'
-                  }`}
-                >
-                  <input
-                    type="radio"
-                    name="cutoff_mode"
-                    value="from_now"
-                    checked={selectedCutoffMode === 'from_now'}
-                    onChange={() => setSelectedCutoffMode('from_now')}
-                    className="mt-0.5 text-neutral-100 focus:ring-0"
-                  />
-                  <div className="space-y-0.5">
-                    <div className="font-semibold flex items-center gap-1.5">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-                      <span>From now (installation date)</span>
-                    </div>
-                    <div className="text-[11px] text-neutral-400">
-                      Process bookmarks created on or after installation date ({syncState?.installation_date || 'first install'}). Older historical bookmarks are excluded.
-                    </div>
-                  </div>
-                </label>
-
-              </div>
-
-              {/* Modal Actions */}
-              <div className="pt-3 border-t border-neutral-800 flex items-center justify-end gap-2.5">
-                <button
-                  type="button"
-                  onClick={() => setIsCutoffModalOpen(false)}
-                  disabled={isSavingCutoff}
-                  className="px-3 py-1.5 border border-neutral-700 hover:border-neutral-500 text-neutral-300 hover:text-white transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={isSavingCutoff}
-                  className="px-4 py-1.5 bg-neutral-100 text-black hover:bg-white font-semibold flex items-center gap-2 transition-colors disabled:opacity-50"
-                >
-                  {isSavingCutoff ? (
-                    <>
-                      <RotateCw className="w-3.5 h-3.5 animate-spin" />
-                      <span>Saving...</span>
-                    </>
-                  ) : (
-                    <span>Save & Apply</span>
-                  )}
-                </button>
-              </div>
-            </form>
-
-          </div>
-        </div>
-      )}
-
+      <CutoffModal
+        isOpen={cutoffMgr.isCutoffModalOpen}
+        selectedCutoffMode={cutoffMgr.selectedCutoffMode}
+        customDateInput={cutoffMgr.customDateInput}
+        cutoffSaveError={cutoffMgr.cutoffSaveError}
+        cutoffSaveSuccess={cutoffMgr.cutoffSaveSuccess}
+        isSavingCutoff={cutoffMgr.isSavingCutoff}
+        syncState={syncState}
+        setSelectedCutoffMode={cutoffMgr.setSelectedCutoffMode}
+        setCustomDateInput={cutoffMgr.setCustomDateInput}
+        onClose={() => cutoffMgr.setIsCutoffModalOpen(false)}
+        onSubmit={cutoffMgr.handleSaveCutoffConfig}
+      />
     </div>
   );
 };

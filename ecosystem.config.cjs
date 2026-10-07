@@ -1,5 +1,5 @@
-const fs = require('fs');
-const path = require('path');
+const fs = require('node:fs');
+const path = require('node:path');
 const dotenv = require('dotenv');
 
 // ==============================================================================
@@ -39,7 +39,10 @@ const PYTHON_PATH = fs.existsSync(DEFAULT_VENV_PYTHON) ? DEFAULT_VENV_PYTHON : `
 // URL normalizer: ensures public domains default to https:// instead of plaintext http://
 function normalizeUrl(u, fallback = '') {
   if (!u || typeof u !== 'string') return fallback;
-  let t = u.trim().replace(/\/+$/, '');
+  let t = u.trim();
+  while (t.endsWith('/')) {
+    t = t.slice(0, -1);
+  }
   if (!t || t.includes('abs.example.com')) return fallback;
   if (!t.startsWith('http://') && !t.startsWith('https://')) {
     if (t.startsWith('localhost') || t.startsWith('127.0.0.1') || t.startsWith('192.168.') || t.startsWith('10.')) {

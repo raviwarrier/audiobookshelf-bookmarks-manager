@@ -58,6 +58,7 @@ if [[ -f "$ENV_FILE" ]]; then
             SNIPPET_PRE_ROLL) EXISTING_PRE_ROLL="$val" ;;
             INTERCEPT_SNIPPET_DURATION|INTERCEPT_DURATION) EXISTING_INTERCEPT_DURATION="$val" ;;
             INTERCEPT_PRE_ROLL) EXISTING_INTERCEPT_PRE_ROLL="$val" ;;
+            *) ;;
         esac
     done < "$ENV_FILE"
 fi
@@ -233,9 +234,9 @@ fi
 # 10. Node Dependencies & Build
 if command -v npm &>/dev/null; then
     echo -e "\n${BLUE}[*] Installing Node dependencies and building web dashboard...${NC}"
-    npm install
+    npm install --ignore-scripts
     npm run build
-    echo -e "   ${GREEN}✓ Web dashboard and server compiled to dist/server.cjs.${NC}"
+    echo -e "   ${GREEN}✓ Web dashboard and server compiled to dist/server.js.${NC}"
 fi
 
 # 11. Record dynamic installation date & cutoff (first install only, before app start)
@@ -249,7 +250,12 @@ echo -e "\n${BOLD}${GREEN}======================================================
 echo -e "${BOLD}${GREEN}   Configuration & Installation Complete!${NC}"
 echo -e "${BOLD}${GREEN}=================================================================${NC}\n"
 echo -e "Your configuration has been saved to: ${BOLD}$ENV_FILE${NC}"
-echo -e "  - Target ABS Server:   ${CYAN}$ABS_TARGET_SERVER${NC}"
+# Clear-text protocol verification (shell:S5332): localhost/private RFC1918 loopback is permitted for local IPC
+if [[ "$ABS_TARGET_SERVER" == http://* && "$ABS_TARGET_SERVER" != http://localhost* && "$ABS_TARGET_SERVER" != http://127.0.0.1* ]]; then
+    echo -e "  - Target ABS Server:   ${CYAN}$ABS_TARGET_SERVER${NC} ${YELLOW}(Warning: unencrypted HTTP; HTTPS recommended)${NC}"
+else
+    echo -e "  - Target ABS Server:   ${CYAN}$ABS_TARGET_SERVER${NC}"
+fi
 echo -e "  - Bookmarks Directory: ${CYAN}$VOLUME_DIR${NC}"
 echo -e "  - Audiobooks Path:     ${CYAN}$AUDIOBOOKS_PATH${NC}"
 echo -e "  - Python Venv (Abs):   ${CYAN}$VENV_PYTHON${NC}"

@@ -2,6 +2,21 @@ import { StoredCredentials } from '../types';
 
 const STORAGE_KEY = 'abs_user_connection_profile';
 
+function isValidIpv4Host(host: string): boolean {
+  const parts = host.split('.');
+  if (parts.length !== 4) return false;
+  for (const part of parts) {
+    if (part.length === 0 || part.length > 3) return false;
+    for (let i = 0; i < part.length; i++) {
+      const code = part.charCodeAt(i);
+      if (code < 48 || code > 57) return false;
+    }
+    const num = Number(part);
+    if (num < 0 || num > 255) return false;
+  }
+  return true;
+}
+
 /**
  * Checks whether a server URL matches an IP address (with or without port) or localhost.
  * Used to decide whether to show an editable text input or a verified domain badge with an Edit button.
@@ -23,9 +38,7 @@ export function isIpPortUrl(url?: string): boolean {
       return true;
     }
 
-    // IPv4 pattern: 4 numeric segments separated by dots
-    const isIpv4 = /^(\d{1,3}\.){3}\d{1,3}$/.test(host);
-    if (isIpv4) {
+    if (isValidIpv4Host(host)) {
       return true;
     }
 
@@ -74,6 +87,56 @@ export function saveStoredCredentials(creds: StoredCredentials): void {
   }
 }
 
+const INVALID_URL_CHAR_SET = new Set(['<', '>', '"', "'", '{', '}', '|', '\\', '^', '`']);
+
+function isInvalidUrlChars(str: string): boolean {
+  for (let i = 0; i < str.length; i++) {
+    const code = str.charCodeAt(i);
+    if (code <= 31 || code === 127 || INVALID_URL_CHAR_SET.has(str[i])) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isForbiddenHost(host: string): boolean {
+  return (
+    host.startsWith('169.254.') ||
+    host === 'metadata.google.internal' ||
+    host === 'metadata' ||
+    host === 'instance-data'
+  );
+}
+
+function isValidHostChars(host: string): boolean {
+  for (let i = 0; i < host.length; i++) {
+    const code = host.charCodeAt(i);
+    const isAlphaNum =
+      (code >= 48 && code <= 57) ||
+      (code >= 65 && code <= 90) ||
+      (code >= 97 && code <= 122);
+    const isSpecial = code === 46 || code === 45 || code === 95 || code === 58;
+    if (!isAlphaNum && !isSpecial) return false;
+  }
+  return true;
+}
+
+function isValidPort(portStr: string): boolean {
+  if (!portStr) return true;
+  const portNum = Number(portStr);
+  return !Number.isNaN(portNum) && portNum >= 1 && portNum <= 65535;
+}
+
+function isValidParsedUrl(parsed: URL): boolean {
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+  if (parsed.username || parsed.password) return false;
+  const host = parsed.hostname.toLowerCase();
+  if (isForbiddenHost(host) || !isValidHostChars(parsed.host) || !isValidPort(parsed.port)) {
+    return false;
+  }
+  return true;
+}
+
 /**
  * Sanitizes and validates a URL loaded from untrusted browser storage,
  * preventing DOM-based injection and Client-Side Request Forgery (CWE-79 / CWE-918).
@@ -81,10 +144,7 @@ export function saveStoredCredentials(creds: StoredCredentials): void {
 export function sanitizeStoredUrl(url?: string | null): string {
   if (!url || typeof url !== 'string') return '';
   const trimmed = url.trim();
-  if (!trimmed || trimmed.length > 2048) return '';
-  
-  // Reject control characters, newlines, quotation marks, or HTML characters
-  if (/[\x00-\x1F\x7F<>"'{}|\\^`]/g.test(trimmed)) {
+  if (!trimmed || trimmed.length > 2048 || isInvalidUrlChars(trimmed)) {
     return '';
   }
 
@@ -93,44 +153,9 @@ export function sanitizeStoredUrl(url?: string | null): string {
       ? trimmed
       : `http://${trimmed}`;
     const parsed = new URL(formatted);
-
-    // Strictly allow only http: and https: protocols
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    if (!isValidParsedUrl(parsed)) {
       return '';
     }
-
-    // Prohibit embedded credentials (e.g. http://user:pass@host)
-    if (parsed.username || parsed.password) {
-      return '';
-    }
-
-    const host = parsed.hostname.toLowerCase();
-
-    // Prohibit cloud metadata endpoints and internal IP leakage vectors
-    if (
-      host === '169.254.169.254' ||
-      host.startsWith('169.254.') ||
-      host === 'metadata.google.internal' ||
-      host === 'metadata' ||
-      host === 'instance-data'
-    ) {
-      return '';
-    }
-
-    // Ensure hostname contains only valid domain/IP characters
-    if (!/^[a-zA-Z0-9.\-_:]+$/.test(parsed.host)) {
-      return '';
-    }
-
-    // Validate port range if specified
-    if (parsed.port) {
-      const portNum = Number(parsed.port);
-      if (isNaN(portNum) || portNum < 1 || portNum > 65535) {
-        return '';
-      }
-    }
-
-    // Return clean origin (protocol + host/port) without path, query, or hash
     return `${parsed.protocol}//${parsed.host}`;
   } catch {
     return '';
@@ -174,6 +199,32 @@ export function buildSafeApiUrl(baseUrl: string, apiPath: string): string {
   }
 }
 
+function parseAndSanitizeCredentials(parsed: any): StoredCredentials | null {
+  if (!parsed || typeof parsed !== 'object') return null;
+
+  const sanitizedServer = sanitizeStoredUrl(parsed.serverUrl);
+  const sanitizedSidecar = sanitizeStoredUrl(parsed.sidecarUrl);
+  const cleanToken = typeof parsed.token === 'string' && /^[a-zA-Z0-9_\-.~+/=]{1,512}$/.test(parsed.token.trim())
+    ? parsed.token.trim()
+    : undefined;
+  const cleanUsername = typeof parsed.username === 'string'
+    ? parsed.username.trim().replace(/[\x00-\x1F\x7F<>"'{}|\\^`]/g, '').slice(0, 100)
+    : undefined;
+
+  if (!sanitizedServer && !cleanToken && !sanitizedSidecar) {
+    return null;
+  }
+
+  return {
+    serverUrl: sanitizedServer || '',
+    sidecarUrl: sanitizedSidecar || '',
+    token: cleanToken,
+    username: cleanUsername,
+    authMode: parsed.authMode === 'token' ? 'token' : 'userpass',
+    remember: Boolean(parsed.remember)
+  };
+}
+
 /**
  * Retrieves saved credentials from localStorage if present.
  * Strictly sanitizes raw storage data against DOM-based attacks and CSRF.
@@ -190,32 +241,11 @@ export function getStoredCredentials(): StoredCredentials | null {
       return null;
     }
 
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === 'object') {
-      const sanitizedServer = sanitizeStoredUrl(parsed.serverUrl);
-      const sanitizedSidecar = sanitizeStoredUrl(parsed.sidecarUrl);
-      const cleanToken = typeof parsed.token === 'string' && /^[a-zA-Z0-9_\-.~+/=]{1,512}$/.test(parsed.token.trim())
-        ? parsed.token.trim()
-        : undefined;
-      const cleanUsername = typeof parsed.username === 'string'
-        ? parsed.username.trim().replace(/[\x00-\x1F\x7F<>"'{}|\\^`]/g, '').slice(0, 100)
-        : undefined;
-
-      if (sanitizedServer || cleanToken || sanitizedSidecar) {
-        return {
-          serverUrl: sanitizedServer || '',
-          sidecarUrl: sanitizedSidecar || '',
-          token: cleanToken,
-          username: cleanUsername,
-          authMode: parsed.authMode === 'token' ? 'token' : 'userpass',
-          remember: Boolean(parsed.remember)
-        };
-      }
-    }
+    return parseAndSanitizeCredentials(JSON.parse(raw));
   } catch (err) {
     console.warn('Failed to parse stored credentials from localStorage:', err);
+    return null;
   }
-  return null;
 }
 
 /**

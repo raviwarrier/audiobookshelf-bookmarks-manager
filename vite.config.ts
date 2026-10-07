@@ -1,7 +1,7 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
-import fs from 'fs';
-import path from 'path';
+import fs from 'node:fs';
+import path from 'node:path';
 import {defineConfig, Plugin} from 'vite';
 
 // LINT.IfChange(aistudio_media_plugin)
@@ -10,7 +10,7 @@ function aistudioMediaPlugin(): Plugin {
     name: 'vite-plugin-aistudio-media',
     configureServer(server) {
       server.middlewares.use((req, res, next) => {
-        if (req.url && req.url.startsWith('/assets/aistudio/')) {
+        if (req.url?.startsWith('/assets/aistudio/')) {
           const rawPath = req.url.split('?')[0].split('#')[0];
           try {
             const decodedPath = decodeURIComponent(rawPath);
