@@ -220,7 +220,10 @@ if [[ -f "$VENV_DIR/bin/python3" ]]; then
     echo -e "   ${GREEN}✓ Virtualenv ready:${NC} $VENV_PYTHON"
     echo -e "   Installing Python packages from requirements.txt..."
     $VENV_PYTHON -m pip install --upgrade pip 2>/dev/null || true
-    $VENV_PYTHON -m pip install -r "$SCRIPT_DIR/requirements.txt"
+    CLEAN_REQ="$(mktemp)"
+    awk '/==/ && !/^[[:space:]]*--/ {sub(/\\$/, ""); print $1}' "$SCRIPT_DIR/requirements.txt" > "$CLEAN_REQ"
+    $VENV_PYTHON -m pip install -r "$CLEAN_REQ"
+    rm -f "$CLEAN_REQ"
     echo -e "   ${GREEN}✓ Python packages installed successfully in venv.${NC}"
 else
     echo -e "   ${YELLOW}[!] Warning: Could not create venv. Falling back to system python3.${NC}"

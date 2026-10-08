@@ -72,7 +72,10 @@ fi
 
 echo -e "   Installing Python packages from requirements.txt into venv..."
 $PYTHON_BIN -m pip install --upgrade pip 2>/dev/null || true
-$PYTHON_BIN -m pip install -r "$SCRIPT_DIR/requirements.txt"
+CLEAN_REQ="$(mktemp)"
+awk '/==/ && !/^[[:space:]]*--/ {sub(/\\$/, ""); print $1}' "$SCRIPT_DIR/requirements.txt" > "$CLEAN_REQ"
+$PYTHON_BIN -m pip install -r "$CLEAN_REQ"
+rm -f "$CLEAN_REQ"
 echo -e "   ${GREEN}✓ Python packages installed successfully in venv.${NC}"
 
 # 3. Node Dependencies & Production Build

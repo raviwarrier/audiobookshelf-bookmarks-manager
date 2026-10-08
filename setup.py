@@ -250,7 +250,21 @@ def _setup_virtualenv(base_dir: str) -> str:
         if os.path.exists(req_file):
             print("   Installing requirements into virtual environment...")
             try:
-                subprocess.run([venv_py, "-m", "pip", "install", "-r", req_file], check=False)
+                import tempfile
+                clean_lines = []
+                with open(req_file, "r", encoding="utf-8") as rf:
+                    for line in rf:
+                        ls = line.strip()
+                        if "==" in ls and not ls.startswith("--"):
+                            clean_lines.append(ls.split()[0])
+                with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, suffix=".txt") as tf:
+                    tf.write("\n".join(clean_lines) + "\n")
+                    tmp_req = tf.name
+                subprocess.run([venv_py, "-m", "pip", "install", "-r", tmp_req], check=False)
+                try:
+                    os.remove(tmp_req)
+                except OSError:
+                    pass
                 print("   [OK] Requirements installed into venv.")
             except Exception as e:
                 print(f"   Notice: pip install returned: {e}")

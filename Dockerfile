@@ -17,9 +17,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Install Python requirements with locked versions and pre-download transcription models (docker:S8544)
+# Install Python requirements with locked versions and pre-download transcription models (docker:S8541, docker:S8544)
 COPY --chown=root:root --chmod=644 requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt \
+RUN pip install --no-cache-dir --only-binary :all: --require-hashes -r requirements.txt \
     && python3 \
         -c "from faster_whisper import WhisperModel; WhisperModel('base.en', device='cpu', compute_type='int8')" \
     && python3 \
