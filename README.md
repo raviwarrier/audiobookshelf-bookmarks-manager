@@ -90,11 +90,11 @@ GitHub: [https://github.com/raviwarrier/audiobookshelf-bookmarks-manager](https:
 - **Audio Files Access**: Direct local directory access or Docker volume mount to source audiobook media files for local lossless slicing (optional: HTTP streaming fallback will be used if files are unmounted).
 - **Node.js**: `v18.0.0` or higher (with `npm`).
 - **Python**: `v3.10` or higher (with `pip` and `venv`).
-- **FFmpeg**: Mandatory system tool for audio slicing and extraction:
-  - *Ubuntu / Debian*: `sudo apt-get install -y ffmpeg`
-  - *macOS (Homebrew)*: `brew install ffmpeg`
-  - *Arch Linux*: `sudo pacman -S ffmpeg`
-  - *Fedora / RHEL*: `sudo dnf install -y ffmpeg`
+- **FFmpeg & Build Tools**: Mandatory system tool for audio slicing and extraction. On Debian/Ubuntu/Raspberry Pi, development headers are also required if PyAV compiles from source:
+  - *Ubuntu / Debian / Raspberry Pi OS*: `sudo apt-get install -y ffmpeg pkg-config libavformat-dev libavcodec-dev libavdevice-dev libavutil-dev libavfilter-dev libswscale-dev libswresample-dev python3-dev build-essential`
+  - *macOS (Homebrew)*: `brew install ffmpeg pkg-config`
+  - *Arch Linux*: `sudo pacman -S ffmpeg pkgconf`
+  - *Fedora / RHEL*: `sudo dnf install -y ffmpeg ffmpeg-devel pkgconf-pkg-config`
 
 ---
 

@@ -218,6 +218,23 @@ fi
 if [[ -f "$VENV_DIR/bin/python3" ]]; then
     VENV_PYTHON="$VENV_DIR/bin/python3"
     echo -e "   ${GREEN}✓ Virtualenv ready:${NC} $VENV_PYTHON"
+    if command -v apt-get &>/dev/null; then
+        if ! command -v pkg-config &>/dev/null || ! pkg-config --exists libavformat libavcodec libavutil 2>/dev/null; then
+            echo -e "   ${YELLOW}Installing FFmpeg build headers (pkg-config, libav*-dev) for PyAV compilation...${NC}"
+            sudo apt-get update && sudo apt-get install -y \
+                ffmpeg \
+                pkg-config \
+                libavformat-dev \
+                libavcodec-dev \
+                libavdevice-dev \
+                libavutil-dev \
+                libavfilter-dev \
+                libswscale-dev \
+                libswresample-dev \
+                python3-dev \
+                build-essential
+        fi
+    fi
     echo -e "   Installing Python packages from requirements.txt..."
     $VENV_PYTHON -m pip install --upgrade pip 2>/dev/null || true
     CLEAN_REQ="$(mktemp)"

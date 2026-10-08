@@ -1761,6 +1761,10 @@ This document tracks all security, reliability, and maintainability fixes applie
     - Updated host provisioning routines (`setup.sh`, `update.sh`, `setup.py`) to extract clean pinned package specifications (`package==version`) when installing into host Python virtual environments.
     - Solves the Raspberry Pi (`piwheels`) transitive dependency resolution issue without compromising Dockerfile static analysis rules.
 
+115. **FFmpeg Development Headers & Build Tools Auto-Provisioning (`setup.sh`, `update.sh`, `README.md`)**
+    - Automatically checks for and installs `pkg-config`, `libav*-dev`, `python3-dev`, and `build-essential` via apt when running on Debian, Ubuntu, or Raspberry Pi OS.
+    - Resolves PyAV (`av==11.*`) compilation failure when prebuilt wheels are unavailable on ARM/Raspberry Pi architectures.
+
 
 
 

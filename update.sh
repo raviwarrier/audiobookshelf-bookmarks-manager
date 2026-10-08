@@ -44,6 +44,25 @@ else
     fi
 fi
 
+# Ensure FFmpeg development headers and build tools are present for platforms (like Raspberry Pi / ARM)
+# where PyAV (av) must be compiled from source
+if command -v apt-get &>/dev/null; then
+    if ! command -v pkg-config &>/dev/null || ! pkg-config --exists libavformat libavcodec libavutil 2>/dev/null; then
+        echo -e "   ${YELLOW}Installing FFmpeg development headers and build tools for PyAV compilation...${NC}"
+        sudo apt-get update && sudo apt-get install -y \
+            pkg-config \
+            libavformat-dev \
+            libavcodec-dev \
+            libavdevice-dev \
+            libavutil-dev \
+            libavfilter-dev \
+            libswscale-dev \
+            libswresample-dev \
+            python3-dev \
+            build-essential
+    fi
+fi
+
 # 2. Python Virtual Environment (venv is default mode) & Dependencies
 echo -e "\n${BLUE}[2/4] Setting up Python virtual environment (venv is default)...${NC}"
 VENV_DIR="$SCRIPT_DIR/venv"
