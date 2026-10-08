@@ -612,8 +612,16 @@ async function startServer() {
 
       const safeParams = new URLSearchParams();
       if (rawTitle) {
-        const cleanTitle = rawTitle.replace(/[\0\r\n\t<>]/g, "").replace(/\.{2,}[/\\]/g, "").trim();
-        safeParams.set("book_title", cleanTitle);
+        let cleanTitle = "";
+        for (const ch of rawTitle) {
+          if (ch !== "\0" && ch !== "\r" && ch !== "\n" && ch !== "\t" && ch !== "<" && ch !== ">" && ch !== "/" && ch !== "\\") {
+            cleanTitle += ch;
+          }
+        }
+        while (cleanTitle.includes("..")) {
+          cleanTitle = cleanTitle.replaceAll("..", "");
+        }
+        safeParams.set("book_title", cleanTitle.trim());
       }
       const cleanFormat = rawFormat.trim().toLowerCase();
       safeParams.set("format", cleanFormat === "markdown" || cleanFormat === "md" ? "markdown" : "zip");

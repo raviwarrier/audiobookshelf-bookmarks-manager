@@ -26,7 +26,7 @@ echo -e "Docker Compose, or PM2 on your host server.\n"
 
 # 1. Check existing .env file
 ENV_FILE="$SCRIPT_DIR/.env"
-EXISTING_ABS_SERVER="http://localhost:13378"
+EXISTING_ABS_SERVER="https://localhost:13378"
 EXISTING_VOLUME_DIR="$SCRIPT_DIR/bookmarks"
 EXISTING_AUDIOBOOKS_PATH="/path/to/your/audiobooks"
 EXISTING_SIDECAR_PORT="13380"
@@ -64,22 +64,18 @@ if [[ -f "$ENV_FILE" ]]; then
 fi
 
 if [[ -n "$EXISTING_ABS_SERVER" && "$EXISTING_ABS_SERVER" == *"abs.example.com"* ]]; then
-    EXISTING_ABS_SERVER="http://localhost:13378"
+    EXISTING_ABS_SERVER="https://localhost:13378"
 fi
 
 # 2. Audiobookshelf Target Server URL
 echo -e "${BOLD}1. Audiobookshelf Target Server URL${NC}"
 echo -e "   This is the URL where your existing Audiobookshelf server is running."
 echo -e "   ${YELLOW}Note: 13378 is Audiobookshelf's default port. The manager connects to it, but does not listen on it.${NC}"
-read -rp "   Target ABS URL [${EXISTING_ABS_SERVER:-http://localhost:13378}]: " INPUT_ABS_SERVER
-ABS_TARGET_SERVER="${INPUT_ABS_SERVER:-${EXISTING_ABS_SERVER:-http://localhost:13378}}"
+read -rp "   Target ABS URL [${EXISTING_ABS_SERVER:-https://localhost:13378}]: " INPUT_ABS_SERVER
+ABS_TARGET_SERVER="${INPUT_ABS_SERVER:-${EXISTING_ABS_SERVER:-https://localhost:13378}}"
 ABS_TARGET_SERVER="${ABS_TARGET_SERVER%/}"
-if [[ "$ABS_TARGET_SERVER" != http://* && "$ABS_TARGET_SERVER" != https://* ]]; then
-    if [[ "$ABS_TARGET_SERVER" == localhost* || "$ABS_TARGET_SERVER" == 127.0.0.1* || "$ABS_TARGET_SERVER" == 192.168.* || "$ABS_TARGET_SERVER" == 10.* ]]; then
-        ABS_TARGET_SERVER="http://$ABS_TARGET_SERVER"
-    else
-        ABS_TARGET_SERVER="https://$ABS_TARGET_SERVER"
-    fi
+if [[ "$ABS_TARGET_SERVER" != *"://"* ]]; then
+    ABS_TARGET_SERVER="https://$ABS_TARGET_SERVER"
 fi
 
 # 3. Output Bookmarks & Volume Directory

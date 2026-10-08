@@ -1732,6 +1732,15 @@ This document tracks all security, reliability, and maintainability fixes applie
 105. **Clear-Text Output Sanitization in Shell Setup (`shell:S5332`, Issue #45)**
     - Removed clear-text protocol warning branch in `setup.sh` that caused static analysis alarms.
 
+106. **Super-Linear Backtracking Elimination in Book Title Query Sanitizer (`typescript:S8786`, Issue #1)**
+    - Replaced quantified regular expression with character filtering loop and non-backtracking `replaceAll` in `handleBookExportProxy` (`server.ts`), guaranteeing linear O(N) runtime and completely removing backtracking risks.
+
+107. **Unused Local Variable Replacement with Wildcard in Bookmark Processing (`python:S1481`, Issue #2)**
+    - Replaced unused local variable `output_md` with wildcard `_` in `process_bookmark_extraction` (`main.py`) following extraction parameter reduction.
+
+108. **Clear-Text Protocol Literal Removal in Setup Script (`shell:S5332`, Issue #3)**
+    - Replaced all clear-text default URLs (`http://localhost:13378`) with secure HTTPS equivalents (`https://localhost:13378`) and updated protocol scheme checks in `setup.sh`.
+
 
 
 

@@ -3385,7 +3385,7 @@ def process_bookmark_extraction(
 
     safe_book_title = sanitize_filename(book_title)
     safe_username = sanitize_filename(user["username"])
-    real_output_dir, target_user_name, output_mp3, output_md, output_json = _prepare_snippet_output_paths(
+    real_output_dir, target_user_name, output_mp3, _, output_json = _prepare_snippet_output_paths(
         safe_username, safe_book_title, timestamp, replace_timestamp
     )
 

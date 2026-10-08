@@ -276,7 +276,9 @@ Conditions:
 
 ## Software Security
 
-I ran the codebase through [SonarCloud](https://sonarcloud.io/) static application security testing (SAST), which flagged a comprehensive set of security issues, code smells, potential filesystem oracles, and unsanitized input flows.
+I ran the codebase through [SonarCloud](https://sonarcloud.io/project/overview?id=raviwarrier_audiobookshelf-bookmarks-manager) static application security testing (SAST), which flagged a comprehensive set of security issues, code smells, potential filesystem oracles, and unsanitized input flows. You can view the project overview and quality gate on [SonarCloud](https://sonarcloud.io/project/overview?id=raviwarrier_audiobookshelf-bookmarks-manager).
 
 I am actively in the process of resolving and hardening each of these items. A complete register detailing all identified issues, taint flows, and remediation fixes is documented in [SECURITY_FIXES.md](SECURITY_FIXES.md) (or [security_fixes.md](SECURITY_FIXES.md)).
+
+If someone wants to recommend another set of tests, I'd be happy to do it as long as it's free.
 

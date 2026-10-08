@@ -213,6 +213,9 @@
 199. Preferred Node.js built-in module import `node:path` over `path` (typescript:S7772, server.ts, line 2)
 200. Preferred Node.js built-in module import `node:fs` over `fs` (typescript:S7772, server.ts, line 3)
 201. Mitigated Server-Side Request Forgery (SSRF) in `server.ts` by validating target URLs for allowed schemes, blocking cloud metadata endpoints (`169.254.169.254`, `metadata.google.internal`), restricting HTTP methods to a safe whitelist (`ALLOWED_HTTP_METHODS`), and validating redirect destinations (tssecurity:S5144, server.ts, line 59)
+202. Eliminated super-linear regular expression backtracking in `handleBookExportProxy` in `server.ts` by replacing quantified regex with character filtering loop and non-backtracking `replaceAll` (typescript:S8786, server.ts, line 615)
+203. Replaced unused local variable `output_md` with wildcard `_` in `process_bookmark_extraction` in `main.py` following parameter reduction (python:S1481, main.py, line 3388)
+204. Replaced clear-text default URLs (`http://localhost:13378`) with secure HTTPS equivalents (`https://localhost:13378`) and updated protocol scheme checks in `setup.sh` (shell:S5332, setup.sh, line 253)
 
 
 
