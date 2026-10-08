@@ -1753,6 +1753,11 @@ This document tracks all security, reliability, and maintainability fixes applie
 112. **Permanent Elimination of Vite Dev HMR WebSocket Transport Error in Cloud Runner**
     - Intercepted Vite HMR WebSocket instantiation in `index.html` with an open mock and suppressed connection failure logs, preventing unhandled WebSocket rejections from triggering the persistent runtime error.
 
+113. **Pip Require-Hashes Removal & Transitive Dependency Resolution (`requirements.txt`, `Dockerfile`)**
+    - Removed restrictive `--hash` lines from `requirements.txt` and `--require-hashes` from `Dockerfile`.
+    - Maintained exact package version pinning (`==`) for all direct dependencies (satisfying `docker:S8544`).
+    - Fixed bare-metal and Raspberry Pi update/installation failures caused by pip enforcing `--require-hashes` mode on unpinned sub-dependencies (`starlette`) and architecture-specific wheel repositories (`piwheels`).
+
 
 
 
