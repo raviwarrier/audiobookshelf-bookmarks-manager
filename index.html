@@ -4,6 +4,47 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Audiobookshelf Bookmarks Manager</title>
+    <script>
+      (function () {
+        function isViteWsError(err) {
+          if (!err) return false;
+          var msg = String(err.message || err.reason || err || '');
+          var file = String(err.filename || '');
+          var stack = String(err.stack || '');
+          return (
+            msg.indexOf('WebSocket') !== -1 ||
+            msg.indexOf('createWebSocketModuleRunnerTransport') !== -1 ||
+            file.indexOf('@vite/client') !== -1 ||
+            stack.indexOf('@vite/client') !== -1
+          );
+        }
+        window.addEventListener(
+          'error',
+          function (e) {
+            if (
+              isViteWsError(e) ||
+              isViteWsError(e.error) ||
+              (e.target && typeof WebSocket !== 'undefined' && e.target instanceof WebSocket)
+            ) {
+              e.preventDefault();
+              e.stopImmediatePropagation();
+              return true;
+            }
+          },
+          true
+        );
+        window.addEventListener(
+          'unhandledrejection',
+          function (e) {
+            if (isViteWsError(e.reason)) {
+              e.preventDefault();
+              e.stopImmediatePropagation();
+            }
+          },
+          true
+        );
+      })();
+    </script>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="alternate icon" type="image/png" href="/logo-light.png" />
     <link rel="apple-touch-icon" href="/logo-light.png" />

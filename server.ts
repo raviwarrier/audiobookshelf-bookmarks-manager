@@ -603,46 +603,66 @@ async function startServer() {
   app.get("/bookmarks/*", handleMediaStreamProxy);
   app.get("/snippets/*", handleMediaStreamProxy);
 
+function sanitizeExportTitle(raw?: unknown): string {
+  if (typeof raw !== "string" || !raw) return "";
+  let clean = "";
+  for (const ch of raw) {
+    if (ch !== "\0" && ch !== "\r" && ch !== "\n" && ch !== "\t" && ch !== "<" && ch !== ">" && ch !== "/" && ch !== "\\") {
+      clean += ch;
+    }
+  }
+  while (clean.includes("..")) {
+    clean = clean.replaceAll("..", "");
+  }
+  return clean.trim();
+}
+
+function resolveExportFormat(raw?: unknown): "markdown" | "zip" {
+  if (typeof raw !== "string") return "zip";
+  const lower = raw.trim().toLowerCase();
+  return lower === "markdown" || lower === "md" ? "markdown" : "zip";
+}
+
+function buildExportQueryString(query: express.Request["query"]): string {
+  const safeParams = new URLSearchParams();
+  const cleanTitle = sanitizeExportTitle(query.book_title);
+  if (cleanTitle) {
+    safeParams.set("book_title", cleanTitle);
+  }
+  safeParams.set("format", resolveExportFormat(query.format));
+  if (typeof query.token === "string" && query.token.trim()) {
+    safeParams.set("token", query.token.trim());
+  }
+  const qs = safeParams.toString();
+  return qs ? `?${qs}` : "";
+}
+
+function extractExportForwardHeaders(req: express.Request): Record<string, string> {
+  const forwardHeaders: Record<string, string> = {};
+  if (req.headers.authorization) forwardHeaders["authorization"] = req.headers.authorization;
+  if (req.headers["x-abs-server-url"]) forwardHeaders["x-abs-server-url"] = req.headers["x-abs-server-url"] as string;
+  return forwardHeaders;
+}
+
+function pipeWebStreamToExpress(stream: any, res: express.Response): void {
+  if (stream) {
+    Readable.fromWeb(stream).pipe(res);
+  } else {
+    res.end();
+  }
+}
+
   // Export Proxy: streams ZIP and Markdown book exports from sidecar service
   const handleBookExportProxy = async (req: express.Request, res: express.Response) => {
     try {
-      const rawTitle = typeof req.query.book_title === "string" ? req.query.book_title : "";
-      const rawFormat = typeof req.query.format === "string" ? req.query.format : "zip";
-      const rawToken = typeof req.query.token === "string" ? req.query.token : "";
-
-      const safeParams = new URLSearchParams();
-      if (rawTitle) {
-        let cleanTitle = "";
-        for (const ch of rawTitle) {
-          if (ch !== "\0" && ch !== "\r" && ch !== "\n" && ch !== "\t" && ch !== "<" && ch !== ">" && ch !== "/" && ch !== "\\") {
-            cleanTitle += ch;
-          }
-        }
-        while (cleanTitle.includes("..")) {
-          cleanTitle = cleanTitle.replaceAll("..", "");
-        }
-        safeParams.set("book_title", cleanTitle.trim());
-      }
-      const cleanFormat = rawFormat.trim().toLowerCase();
-      safeParams.set("format", cleanFormat === "markdown" || cleanFormat === "md" ? "markdown" : "zip");
-      if (rawToken) {
-        safeParams.set("token", rawToken.trim());
-      }
-
-      const queryString = safeParams.toString() ? `?${safeParams.toString()}` : "";
+      const queryString = buildExportQueryString(req.query);
       const targetUrl = buildSafeSidecarUrl(`/api/user/bookmarks/export-book${queryString}`, ["/api/user/bookmarks/export-book"]);
-      const forwardHeaders: Record<string, string> = {};
-      if (req.headers.authorization) forwardHeaders["authorization"] = req.headers.authorization;
-      if (req.headers["x-abs-server-url"]) forwardHeaders["x-abs-server-url"] = req.headers["x-abs-server-url"] as string;
+      const forwardHeaders = extractExportForwardHeaders(req);
 
       const sidecarRes = await fetch(targetUrl, { headers: forwardHeaders });
       res.status(sidecarRes.status);
       sidecarRes.headers.forEach((v, k) => res.setHeader(k, v));
-      if (sidecarRes.body) {
-        Readable.fromWeb(sidecarRes.body as any).pipe(res);
-      } else {
-        res.end();
-      }
+      pipeWebStreamToExpress(sidecarRes.body, res);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Book export proxy failed";
       res.status(502).json({ error: "Failed to stream book export from sidecar", message: msg });
@@ -901,7 +921,7 @@ async function startServer() {
   // Vite middleware for development vs static production build
   if (!isProduction) {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: { middlewareMode: true, hmr: false },
       appType: "spa",
     });
     app.use(vite.middlewares);

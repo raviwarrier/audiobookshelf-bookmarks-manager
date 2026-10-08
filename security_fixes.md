@@ -1741,6 +1741,9 @@ This document tracks all security, reliability, and maintainability fixes applie
 108. **Clear-Text Protocol Literal Removal in Setup Script (`shell:S5332`, Issue #3)**
     - Replaced all clear-text default URLs (`http://localhost:13378`) with secure HTTPS equivalents (`https://localhost:13378`) and updated protocol scheme checks in `setup.sh`.
 
+109. **Cognitive Complexity Reduction in Book Export Proxy (`typescript:S3776`)**
+    - Decomposed `handleBookExportProxy` in `server.ts` into modular focused helpers (`sanitizeExportTitle`, `resolveExportFormat`, `buildExportQueryString`, `extractExportForwardHeaders`, and `pipeWebStreamToExpress`), reducing function Cognitive Complexity from 22 to 1 (far below the authorized threshold of 15).
+
 
 
 

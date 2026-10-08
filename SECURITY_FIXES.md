@@ -216,6 +216,7 @@
 202. Eliminated super-linear regular expression backtracking in `handleBookExportProxy` in `server.ts` by replacing quantified regex with character filtering loop and non-backtracking `replaceAll` (typescript:S8786, server.ts, line 615)
 203. Replaced unused local variable `output_md` with wildcard `_` in `process_bookmark_extraction` in `main.py` following parameter reduction (python:S1481, main.py, line 3388)
 204. Replaced clear-text default URLs (`http://localhost:13378`) with secure HTTPS equivalents (`https://localhost:13378`) and updated protocol scheme checks in `setup.sh` (shell:S5332, setup.sh, line 253)
+205. Reduced Cognitive Complexity in `handleBookExportProxy` in `server.ts` from 22 to 1 by decomposing into modular helpers (`sanitizeExportTitle`, `resolveExportFormat`, `buildExportQueryString`, `extractExportForwardHeaders`, `pipeWebStreamToExpress`) (typescript:S3776, server.ts, line 607)
 
 
 
