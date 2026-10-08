@@ -26,7 +26,7 @@ import subprocess
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, Dict, Any, List, Tuple, Callable
 from urllib.parse import quote_plus, quote, urlsplit
 
 try:
@@ -166,7 +166,12 @@ from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse, JSON
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field, validator
+try:
+    from pydantic import BaseModel, Field, field_validator
+    _HAS_PYDANTIC_V2 = True
+except ImportError:
+    from pydantic import BaseModel, Field, validator  # type: ignore
+    _HAS_PYDANTIC_V2 = False
 
 # Configure logging (stream to sys.stdout so standard INFO logs are routed to pm2 out.log)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", stream=sys.stdout)
@@ -2021,21 +2026,39 @@ class SnippetExpandRequest(BaseModel):
     server_url: Optional[str] = None
     serverUrl: Optional[str] = None
 
-    @validator("timestamp", pre=True, always=True)
-    def validate_timestamp_format(cls, v):
-        if not v or not isinstance(v, str):
-            raise ValueError("Timestamp identifier is required.")
-        clean = v.strip()
-        if not clean:
-            raise ValueError("Timestamp identifier cannot be empty.")
-        if "/" in clean or "\\" in clean or ".." in clean or "\0" in clean or "." in clean:
-            raise ValueError("Security violation: timestamp contains forbidden path traversal characters.")
-        if not re.match(SAFE_ALPHANUMERIC_REGEX, clean) or clean.startswith("-") or len(clean) > 64:
-            raise ValueError("Invalid timestamp: must contain only alphanumeric characters, underscores, and hyphens.")
-        base = os.path.basename(clean)
-        if base != clean or not base:
-            raise ValueError("Invalid timestamp format.")
-        return base
+    if _HAS_PYDANTIC_V2:
+        @field_validator("timestamp", mode="before")
+        @classmethod
+        def validate_timestamp_format(cls, v):
+            if not v or not isinstance(v, str):
+                raise ValueError("Timestamp identifier is required.")
+            clean = v.strip()
+            if not clean:
+                raise ValueError("Timestamp identifier cannot be empty.")
+            if "/" in clean or "\\" in clean or ".." in clean or "\0" in clean or "." in clean:
+                raise ValueError("Security violation: timestamp contains forbidden path traversal characters.")
+            if not re.match(SAFE_ALPHANUMERIC_REGEX, clean) or clean.startswith("-") or len(clean) > 64:
+                raise ValueError("Invalid timestamp: must contain only alphanumeric characters, underscores, and hyphens.")
+            base = os.path.basename(clean)
+            if base != clean or not base:
+                raise ValueError("Invalid timestamp format.")
+            return base
+    else:
+        @validator("timestamp", pre=True, always=True)
+        def validate_timestamp_format(cls, v):
+            if not v or not isinstance(v, str):
+                raise ValueError("Timestamp identifier is required.")
+            clean = v.strip()
+            if not clean:
+                raise ValueError("Timestamp identifier cannot be empty.")
+            if "/" in clean or "\\" in clean or ".." in clean or "\0" in clean or "." in clean:
+                raise ValueError("Security violation: timestamp contains forbidden path traversal characters.")
+            if not re.match(SAFE_ALPHANUMERIC_REGEX, clean) or clean.startswith("-") or len(clean) > 64:
+                raise ValueError("Invalid timestamp: must contain only alphanumeric characters, underscores, and hyphens.")
+            base = os.path.basename(clean)
+            if base != clean or not base:
+                raise ValueError("Invalid timestamp format.")
+            return base
 
 
 class CutoffConfigRequest(BaseModel):

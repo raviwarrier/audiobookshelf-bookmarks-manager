@@ -1765,6 +1765,19 @@ This document tracks all security, reliability, and maintainability fixes applie
     - Automatically checks for and installs `pkg-config`, `libav*-dev`, `python3-dev`, and `build-essential` via apt when running on Debian, Ubuntu, or Raspberry Pi OS.
     - Resolves PyAV (`av==11.*`) compilation failure when prebuilt wheels are unavailable on ARM/Raspberry Pi architectures.
 
+116. **Sidecar Startup Fix (`Callable` import & Pydantic v2 `@field_validator` migration)**
+    - Added missing `Callable` to `from typing import ...` in `main.py` to prevent `NameError: name 'Callable' is not defined` crash when defining `_handle_socket_event_payload`.
+    - Added seamless Pydantic v2 `@field_validator` support with backwards-compatible fallback to `@validator` for Pydantic v1, eliminating deprecation warnings.
+
+117. **Dynamic Username Resolution & Fallback (`absClient.ts`, `AuthModal.tsx`)**
+    - Enabled preferred username resolution during API Token verification (`authenticateWithToken`).
+    - Added an optional username field to the API Token tab in `AuthModal`, allowing users connecting with API tokens to specify their ABS username when Audiobookshelf's token response omits user details.
+
+118. **Proxy JSON Auto-Detection & GET `/api/authorize` Alignment (`server.ts`, `absClient.ts`)**
+    - Fixed proxy response parser (`parseResponseBodyData` in `server.ts`) to auto-detect JSON payloads by checking for leading `{`/`[` brackets even when reverse proxies omit or alter the `Content-Type: application/json` header.
+    - Updated `absFetch` in `src/lib/absClient.ts` to defensively parse stringified JSON responses.
+    - Aligned token verification to query `GET /api/authorize` (Audiobookshelf's documented endpoint) before attempting `POST`, restoring automatic detection of user profiles (`@ravi`) and listening sessions.
+
 
 
 

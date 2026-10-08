@@ -132,10 +132,25 @@ async function absFetch(
     throw new Error(json.message || json.error || `Proxy error (HTTP ${res.status})`);
   }
 
+  let responseData = json.data;
+  if (typeof responseData === 'string') {
+    const trimmed = responseData.trim();
+    if (
+      (trimmed.startsWith('{') && trimmed.endsWith('}')) ||
+      (trimmed.startsWith('[') && trimmed.endsWith(']'))
+    ) {
+      try {
+        responseData = JSON.parse(trimmed);
+      } catch {
+        // preserve original string
+      }
+    }
+  }
+
   return {
     ok: json.ok,
     status: json.status,
-    data: json.data,
+    data: responseData,
   };
 }
 
@@ -246,6 +261,7 @@ function formatTokenErrorMessage(res: { status: number; data: any }, cleanUrl: s
 async function authenticateWithToken(
   cleanUrl: string,
   token?: string,
+  preferredUsername?: string,
   useProxy: boolean = true
 ): Promise<AbsAuthResult> {
   if (!token) {
@@ -254,10 +270,10 @@ async function authenticateWithToken(
 
   const cleanToken = stripBearerPrefix(token);
 
-  let res = await verifyTokenEndpoint(cleanUrl, '/api/authorize', 'POST', cleanToken, useProxy);
+  let res = await verifyTokenEndpoint(cleanUrl, '/api/authorize', 'GET', cleanToken, useProxy);
 
   if (!res.ok && res.status !== 401 && res.status !== 403) {
-    res = await verifyTokenEndpoint(cleanUrl, '/api/authorize', 'GET', cleanToken, useProxy);
+    res = await verifyTokenEndpoint(cleanUrl, '/api/authorize', 'POST', cleanToken, useProxy);
   }
 
   if (!res.ok && res.status !== 401 && res.status !== 403) {
@@ -269,13 +285,20 @@ async function authenticateWithToken(
   }
 
   const data = res.data;
-  const user = data.user || data;
+  const user = (data && typeof data === 'object' && data.user) || data || {};
+  const resolvedUsername =
+    (typeof user?.username === 'string' && user.username.trim()) ||
+    (typeof user?.name === 'string' && user.name.trim()) ||
+    (typeof data?.username === 'string' && data.username.trim()) ||
+    (typeof data?.name === 'string' && data.name.trim()) ||
+    (typeof preferredUsername === 'string' && preferredUsername.trim()) ||
+    'abs_listener';
 
   return {
     token: cleanToken,
     user: {
-      id: String(user.id || 'abs_user'),
-      username: String(user.username || 'abs_listener'),
+      id: String(user?.id || 'abs_user'),
+      username: resolvedUsername,
     },
   };
 }
@@ -297,7 +320,7 @@ export async function authenticateAbs(
     return authenticateWithUserPass(cleanUrl, username, password, useProxy);
   }
 
-  return authenticateWithToken(cleanUrl, token, useProxy);
+  return authenticateWithToken(cleanUrl, token, username, useProxy);
 }
 
 function findMatchingAudioFile(audioFiles: any[], curTime: number): any {

@@ -121,7 +121,12 @@ function createDecompressedStream(res: http.IncomingMessage): NodeJS.ReadableStr
 function parseResponseBodyData(chunks: Buffer[], contentTypeHeader = ""): any {
   const buf = Buffer.concat(chunks);
   const rawText = buf.toString("utf-8");
-  if (contentTypeHeader.toLowerCase().includes("application/json")) {
+  const trimmed = rawText.trim();
+  if (
+    contentTypeHeader.toLowerCase().includes("json") ||
+    (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+    (trimmed.startsWith("[") && trimmed.endsWith("]"))
+  ) {
     try {
       return JSON.parse(rawText);
     } catch {

@@ -201,18 +201,35 @@ const AuthModalCredentialFields: React.FC<AuthModalCredentialFieldsProps> = ({
 }) => {
   if (authMode === 'token') {
     return (
-      <div>
-        <label htmlFor="auth-modal-token-input" className="block text-xs font-medium text-neutral-300 mb-1">
-          <span className="block mb-1">Audiobookshelf API Token</span>
-          <input
-            id="auth-modal-token-input"
-            type="password"
-            value={token}
-            onChange={(e) => setToken(e.target.value)}
-            placeholder="Paste API Token / Bearer Token from ABS Profile"
-            className="w-full bg-[#181818] border border-neutral-700 hover:border-neutral-500 focus:border-neutral-300 focus:bg-[#202020] text-white px-3 py-2 text-xs focus:outline-none transition-colors"
-          />
-        </label>
+      <div className="space-y-3">
+        <div>
+          <label htmlFor="auth-modal-token-input" className="block text-xs font-medium text-neutral-300 mb-1">
+            <span className="block mb-1">Audiobookshelf API Token</span>
+            <input
+              id="auth-modal-token-input"
+              type="password"
+              value={token}
+              onChange={(e) => setToken(e.target.value)}
+              placeholder="Paste API Token / Bearer Token from ABS Profile"
+              className="w-full bg-[#181818] border border-neutral-700 hover:border-neutral-500 focus:border-neutral-300 focus:bg-[#202020] text-white px-3 py-2 text-xs focus:outline-none transition-colors"
+            />
+          </label>
+        </div>
+        <div>
+          <label htmlFor="auth-modal-token-username-input" className="block text-xs font-medium text-neutral-300 mb-1">
+            <span className="block mb-1">
+              Username <span className="text-neutral-500 font-normal">(Optional — matches your ABS profile)</span>
+            </span>
+            <input
+              id="auth-modal-token-username-input"
+              type="text"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              placeholder="e.g. ravi (auto-detected if token includes username)"
+              className="w-full bg-[#181818] border border-neutral-700 hover:border-neutral-500 focus:border-neutral-300 focus:bg-[#202020] text-white px-3 py-2 text-xs focus:outline-none transition-colors"
+            />
+          </label>
+        </div>
       </div>
     );
   }
