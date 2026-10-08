@@ -1744,6 +1744,15 @@ This document tracks all security, reliability, and maintainability fixes applie
 109. **Cognitive Complexity Reduction in Book Export Proxy (`typescript:S3776`)**
     - Decomposed `handleBookExportProxy` in `server.ts` into modular focused helpers (`sanitizeExportTitle`, `resolveExportFormat`, `buildExportQueryString`, `extractExportForwardHeaders`, and `pipeWebStreamToExpress`), reducing function Cognitive Complexity from 22 to 1 (far below the authorized threshold of 15).
 
+110. **Modern String Substring Check with `.includes()` (`javascript:S7765`, Issues #1-#4)**
+    - Replaced legacy `.indexOf(...) !== -1` with `.includes(...)` across substring checks in `index.html`.
+
+111. **Outer Scope Function Promotion for Export Helpers (`typescript:S7721`, Issues #5-#6)**
+    - Moved nested helper functions `sanitizeExportTitle`, `resolveExportFormat`, `buildExportQueryString`, `extractExportForwardHeaders`, and `pipeWebStreamToExpress` from inside `startServer` to module outer scope in `server.ts`.
+
+112. **Permanent Elimination of Vite Dev HMR WebSocket Transport Error in Cloud Runner**
+    - Intercepted Vite HMR WebSocket instantiation in `index.html` with an open mock and suppressed connection failure logs, preventing unhandled WebSocket rejections from triggering the persistent runtime error.
+
 
 
 

@@ -500,6 +500,55 @@ function formatProxyErrorMessage(err: unknown, targetUrl?: string): { message: s
   return { message: msg, hint };
 }
 
+function sanitizeExportTitle(raw?: unknown): string {
+  if (typeof raw !== "string" || !raw) return "";
+  let clean = "";
+  for (const ch of raw) {
+    if (ch !== "\0" && ch !== "\r" && ch !== "\n" && ch !== "\t" && ch !== "<" && ch !== ">" && ch !== "/" && ch !== "\\") {
+      clean += ch;
+    }
+  }
+  while (clean.includes("..")) {
+    clean = clean.replaceAll("..", "");
+  }
+  return clean.trim();
+}
+
+function resolveExportFormat(raw?: unknown): "markdown" | "zip" {
+  if (typeof raw !== "string") return "zip";
+  const lower = raw.trim().toLowerCase();
+  return lower === "markdown" || lower === "md" ? "markdown" : "zip";
+}
+
+function buildExportQueryString(query: express.Request["query"]): string {
+  const safeParams = new URLSearchParams();
+  const cleanTitle = sanitizeExportTitle(query.book_title);
+  if (cleanTitle) {
+    safeParams.set("book_title", cleanTitle);
+  }
+  safeParams.set("format", resolveExportFormat(query.format));
+  if (typeof query.token === "string" && query.token.trim()) {
+    safeParams.set("token", query.token.trim());
+  }
+  const qs = safeParams.toString();
+  return qs ? `?${qs}` : "";
+}
+
+function extractExportForwardHeaders(req: express.Request): Record<string, string> {
+  const forwardHeaders: Record<string, string> = {};
+  if (req.headers.authorization) forwardHeaders["authorization"] = req.headers.authorization;
+  if (req.headers["x-abs-server-url"]) forwardHeaders["x-abs-server-url"] = req.headers["x-abs-server-url"] as string;
+  return forwardHeaders;
+}
+
+function pipeWebStreamToExpress(stream: any, res: express.Response): void {
+  if (stream) {
+    Readable.fromWeb(stream).pipe(res);
+  } else {
+    res.end();
+  }
+}
+
 async function startServer() {
   // Ensure installation_date.json exists before app start, without overwriting on updates
   let installationConfig = ensureInstallationDateConfig();
@@ -602,55 +651,6 @@ async function startServer() {
   };
   app.get("/bookmarks/*", handleMediaStreamProxy);
   app.get("/snippets/*", handleMediaStreamProxy);
-
-function sanitizeExportTitle(raw?: unknown): string {
-  if (typeof raw !== "string" || !raw) return "";
-  let clean = "";
-  for (const ch of raw) {
-    if (ch !== "\0" && ch !== "\r" && ch !== "\n" && ch !== "\t" && ch !== "<" && ch !== ">" && ch !== "/" && ch !== "\\") {
-      clean += ch;
-    }
-  }
-  while (clean.includes("..")) {
-    clean = clean.replaceAll("..", "");
-  }
-  return clean.trim();
-}
-
-function resolveExportFormat(raw?: unknown): "markdown" | "zip" {
-  if (typeof raw !== "string") return "zip";
-  const lower = raw.trim().toLowerCase();
-  return lower === "markdown" || lower === "md" ? "markdown" : "zip";
-}
-
-function buildExportQueryString(query: express.Request["query"]): string {
-  const safeParams = new URLSearchParams();
-  const cleanTitle = sanitizeExportTitle(query.book_title);
-  if (cleanTitle) {
-    safeParams.set("book_title", cleanTitle);
-  }
-  safeParams.set("format", resolveExportFormat(query.format));
-  if (typeof query.token === "string" && query.token.trim()) {
-    safeParams.set("token", query.token.trim());
-  }
-  const qs = safeParams.toString();
-  return qs ? `?${qs}` : "";
-}
-
-function extractExportForwardHeaders(req: express.Request): Record<string, string> {
-  const forwardHeaders: Record<string, string> = {};
-  if (req.headers.authorization) forwardHeaders["authorization"] = req.headers.authorization;
-  if (req.headers["x-abs-server-url"]) forwardHeaders["x-abs-server-url"] = req.headers["x-abs-server-url"] as string;
-  return forwardHeaders;
-}
-
-function pipeWebStreamToExpress(stream: any, res: express.Response): void {
-  if (stream) {
-    Readable.fromWeb(stream).pipe(res);
-  } else {
-    res.end();
-  }
-}
 
   // Export Proxy: streams ZIP and Markdown book exports from sidecar service
   const handleBookExportProxy = async (req: express.Request, res: express.Response) => {
