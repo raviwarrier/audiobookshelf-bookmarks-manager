@@ -1787,6 +1787,11 @@ This document tracks all security, reliability, and maintainability fixes applie
     - Fixed undefined `final_lib_id` and `final_time` references in `delete_user_bookmark` by referencing resolved `tombstone_meta["lib_id"]` and `tombstone_meta["book_time"]`.
     - Performed full AST and Python symbol table (`symtable`) static scope resolution audit across all Python files (`main.py`, `setup.py`, `init_installation_date.py`), verifying 0 unresolved global or local references.
 
+121. **Cross-Version WebSocket Header Resolution (`main.py`)**
+    - Resolved `TypeError: create_connection() got an unexpected keyword argument 'additional_headers'` in `websockets.connect`.
+    - Added an async context manager `_open_websocket` that inspects `websockets.connect` parameter signatures to dynamically select `extra_headers` on `websockets <= 12` vs `additional_headers` on `websockets >= 13`, with an automatic runtime fallback on `TypeError`.
+    - Prevents Socket.IO connection drops and 30-67s reconnection loops against upstream Audiobookshelf servers.
+
 
 
 

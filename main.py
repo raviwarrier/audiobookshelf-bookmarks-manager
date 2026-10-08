@@ -4151,6 +4151,41 @@ class AbsSocketIoListener:
 
         return disconnect_reason, custom_backoff
 
+    @staticmethod
+    @asynccontextmanager
+    async def _open_websocket(socket_url: str, headers: Dict[str, str], **kwargs):
+        """Cross-version websockets connector supporting websockets <=12 (extra_headers) and >=13 (additional_headers)."""
+        import inspect
+        use_additional = False
+        try:
+            sig = inspect.signature(websockets.connect)
+            if "additional_headers" in sig.parameters:
+                use_additional = True
+            elif "extra_headers" in sig.parameters:
+                use_additional = False
+            else:
+                ws_ver = getattr(websockets, "__version__", "12")
+                use_additional = int(str(ws_ver).split(".")[0]) >= 13
+        except Exception:
+            use_additional = False
+
+        primary_arg = "additional_headers" if use_additional else "extra_headers"
+        fallback_arg = "extra_headers" if use_additional else "additional_headers"
+
+        try:
+            primary_kwargs = dict(kwargs)
+            primary_kwargs[primary_arg] = headers
+            async with websockets.connect(socket_url, **primary_kwargs) as ws:
+                yield ws
+        except TypeError as te:
+            if "additional_headers" in str(te) or "extra_headers" in str(te):
+                fallback_kwargs = dict(kwargs)
+                fallback_kwargs[fallback_arg] = headers
+                async with websockets.connect(socket_url, **fallback_kwargs) as ws:
+                    yield ws
+            else:
+                raise
+
     async def _run_connection(self, socket_url: str, origin_host: str, token: str) -> Tuple[float, str, Optional[float]]:
         """Connects to Audiobookshelf WebSocket, executes handshake, and enters message loop."""
         connect_kwargs = {"ping_interval": None, "ping_timeout": None, "max_size": 10 * 1024 * 1024}
@@ -4167,12 +4202,7 @@ class AbsSocketIoListener:
         try:
             masked_url = socket_url.split("&token=")[0]
             logger.info(f"[Socket.IO Listener] Connecting to Audiobookshelf at {masked_url}...")
-            try:
-                connect_cm = websockets.connect(socket_url, additional_headers=headers_dict, **connect_kwargs)
-            except TypeError:
-                connect_cm = websockets.connect(socket_url, extra_headers=headers_dict, **connect_kwargs)
-
-            async with connect_cm as ws:
+            async with self._open_websocket(socket_url, headers=headers_dict, **connect_kwargs) as ws:
                 self._connected = True
                 connected_at = time.time()
                 logger.info("[Socket.IO Listener] Connected to Audiobookshelf WebSocket. Awaiting Engine.IO handshake...")
