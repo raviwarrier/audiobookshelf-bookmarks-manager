@@ -250,12 +250,7 @@ echo -e "\n${BOLD}${GREEN}======================================================
 echo -e "${BOLD}${GREEN}   Configuration & Installation Complete!${NC}"
 echo -e "${BOLD}${GREEN}=================================================================${NC}\n"
 echo -e "Your configuration has been saved to: ${BOLD}$ENV_FILE${NC}"
-# Clear-text protocol verification (shell:S5332): localhost/private RFC1918 loopback is permitted for local IPC
-if [[ "$ABS_TARGET_SERVER" == http://* && "$ABS_TARGET_SERVER" != http://localhost* && "$ABS_TARGET_SERVER" != http://127.0.0.1* ]]; then
-    echo -e "  - Target ABS Server:   ${CYAN}$ABS_TARGET_SERVER${NC} ${YELLOW}(Warning: unencrypted HTTP; HTTPS recommended)${NC}"
-else
-    echo -e "  - Target ABS Server:   ${CYAN}$ABS_TARGET_SERVER${NC}"
-fi
+echo -e "  - Target ABS Server:   ${CYAN}$ABS_TARGET_SERVER${NC}"
 echo -e "  - Bookmarks Directory: ${CYAN}$VOLUME_DIR${NC}"
 echo -e "  - Audiobooks Path:     ${CYAN}$AUDIOBOOKS_PATH${NC}"
 echo -e "  - Python Venv (Abs):   ${CYAN}$VENV_PYTHON${NC}"

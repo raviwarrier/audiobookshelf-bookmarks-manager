@@ -1,7 +1,9 @@
 import { sanitizeStoredUrl } from './authStorage';
 
+export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
+
 export interface SafeRequestOptions {
-  method?: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
+  method?: HttpMethod;
   headers?: Record<string, string>;
   body?: any;
   token?: string | null;
@@ -41,7 +43,7 @@ export function sanitizeApiPath(path: string): string {
 
 export function stripTrailingSlash(url: string): string {
   let end = url.length;
-  while (end > 0 && url.charCodeAt(end - 1) === 47 /* '/' */) {
+  while (end > 0 && url.codePointAt(end - 1) === 47 /* '/' */) {
     end--;
   }
   return url.slice(0, end);
@@ -91,14 +93,14 @@ async function dispatchViaProxy(
     ok: isOk,
     status: json.status || proxyRes.status,
     data: innerData,
-    json: async () => innerData,
-    text: async () => (typeof innerData === 'string' ? innerData : JSON.stringify(innerData)),
+    json: () => Promise.resolve(innerData),
+    text: () => Promise.resolve(typeof innerData === 'string' ? innerData : JSON.stringify(innerData)),
   };
 }
 
 async function dispatchSameOrigin(
   safePath: string,
-  method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH',
+  method: HttpMethod,
   headers: Record<string, string>,
   body: any
 ): Promise<SafeApiResponse> {
@@ -119,8 +121,8 @@ async function dispatchSameOrigin(
     ok: res.ok,
     status: res.status,
     data: parsedData,
-    json: async () => parsedData,
-    text: async () => rawText,
+    json: () => Promise.resolve(parsedData),
+    text: () => Promise.resolve(rawText),
   };
 }
 
@@ -139,7 +141,7 @@ export async function safeSidecarFetch(
   options: SafeRequestOptions = {}
 ): Promise<SafeApiResponse> {
   const safePath = sanitizeApiPath(apiPath);
-  const method = (options.method || 'GET').toUpperCase() as 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
+  const method = (options.method || 'GET').toUpperCase() as HttpMethod;
   const forwardHeaders = buildForwardHeaders(options);
 
   const useProxy = options.useProxy !== false;

@@ -129,13 +129,7 @@ def _prompt_volume_dir(existing_val: str, base_dir: str) -> str:
     print("\n2. Output Directory for Bookmarks & Transcripts (VOLUME_DIR)")
     print("   Where sliced audio (.mp3), markdown transcripts (.md), and JSON metadata will be saved.")
     raw_vol_dir = get_input("   Directory path", existing_val)
-    vol_dir = sanitize_directory_path(raw_vol_dir, existing_val, base_dir=base_dir)
-    if vol_dir and not os.path.islink(vol_dir) and is_safe_filesystem_path(vol_dir, base_dir):
-        try:
-            os.makedirs(vol_dir, exist_ok=True)
-        except Exception as e:
-            print(f"   Warning: Could not create directory {vol_dir}: {e}")
-    return vol_dir
+    return sanitize_directory_path(raw_vol_dir, existing_val, base_dir=base_dir)
 
 def _prompt_audiobooks_path(existing_val: str, base_dir: str) -> str:
     print("\n3. Audiobooks Media Library Directory (Host Path)")

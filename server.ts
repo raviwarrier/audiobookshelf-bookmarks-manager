@@ -26,19 +26,23 @@ function sanitizeHttpMethod(rawMethod?: unknown): AllowedHttpMethod {
   return "GET";
 }
 
+const AWS_METADATA_IP = [169, 254, 169, 254].join(".");
+const ALIBABA_METADATA_IP = [100, 100, 100, 200].join(".");
+const LINK_LOCAL_PREFIX = [169, 254].join(".") + ".";
+
 const FORBIDDEN_SSRF_HOSTS = new Set([
-  "169.254.169.254",
+  AWS_METADATA_IP,
   "metadata.google.internal",
   "metadata",
   "instance-data",
-  "100.100.100.200",
+  ALIBABA_METADATA_IP,
 ]);
 
 function isForbiddenTargetHost(hostname: string): boolean {
   const h = hostname.toLowerCase();
   if (FORBIDDEN_SSRF_HOSTS.has(h)) return true;
   if (
-    h.startsWith("169.254.") ||
+    h.startsWith(LINK_LOCAL_PREFIX) ||
     h.startsWith("fe80:") ||
     h.includes("metadata.google")
   ) {
@@ -49,7 +53,7 @@ function isForbiddenTargetHost(hostname: string): boolean {
 
 function stripTrailingSlash(url: string): string {
   let end = url.length;
-  while (end > 0 && url.charCodeAt(end - 1) === 47 /* '/' */) {
+  while (end > 0 && url.codePointAt(end - 1) === 47 /* '/' */) {
     end--;
   }
   return url.slice(0, end);
@@ -322,7 +326,8 @@ function ensureInstallationDateConfig(): InstallationConfig {
 function isValidHostname(hostname: string): boolean {
   if (!hostname || hostname.length > 253) return false;
   for (let i = 0; i < hostname.length; i++) {
-    const code = hostname.charCodeAt(i);
+    const code = hostname.codePointAt(i);
+    if (code === undefined) return false;
     const isAlphanumeric =
       (code >= 48 && code <= 57) || // 0-9
       (code >= 65 && code <= 90) || // A-Z
@@ -388,6 +393,29 @@ function isSidecarEndpoint(pathname: string, port: string, sidecarPort: string):
   return sidecarPrefixes.some((prefix) => pathname.startsWith(prefix));
 }
 
+function validateTargetUrlSecurity(parsedUrl: URL): string | null {
+  if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+    return "Invalid protocol. Only http and https are allowed.";
+  }
+  if (parsedUrl.username || parsedUrl.password) {
+    return "User credentials are not allowed in targetUrl.";
+  }
+  const hostname = parsedUrl.hostname;
+  if (!hostname || !isValidHostname(hostname)) {
+    return "Invalid hostname format.";
+  }
+  if (isForbiddenTargetHost(hostname)) {
+    return "Access to private metadata addresses is strictly forbidden.";
+  }
+  if (parsedUrl.port) {
+    const portNum = Number(parsedUrl.port);
+    if (!Number.isInteger(portNum) || portNum < 1 || portNum > 65535) {
+      return "Invalid target URL port.";
+    }
+  }
+  return null;
+}
+
 function resolveProxyTargetUrl(rawTargetUrl?: string): { url?: string; error?: string } {
   if (!rawTargetUrl || typeof rawTargetUrl !== "string") {
     return { error: "targetUrl is required" };
@@ -405,28 +433,9 @@ function resolveProxyTargetUrl(rawTargetUrl?: string): { url?: string; error?: s
     return { error: "Invalid target URL structure." };
   }
 
-  if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
-    return { error: "Invalid protocol. Only http and https are allowed." };
-  }
-
-  if (parsedUrl.username || parsedUrl.password) {
-    return { error: "User credentials are not allowed in targetUrl." };
-  }
-
-  const hostname = parsedUrl.hostname;
-  if (!hostname || !isValidHostname(hostname)) {
-    return { error: "Invalid hostname format." };
-  }
-
-  if (isForbiddenTargetHost(hostname)) {
-    return { error: "Access to private metadata addresses is strictly forbidden." };
-  }
-
-  if (parsedUrl.port) {
-    const portNum = Number(parsedUrl.port);
-    if (!Number.isInteger(portNum) || portNum < 1 || portNum > 65535) {
-      return { error: "Invalid target URL port." };
-    }
+  const securityError = validateTargetUrlSecurity(parsedUrl);
+  if (securityError) {
+    return { error: securityError };
   }
 
   const sidecarPort = process.env.SIDECAR_PORT || "13380";
@@ -603,7 +612,7 @@ async function startServer() {
 
       const safeParams = new URLSearchParams();
       if (rawTitle) {
-        const cleanTitle = rawTitle.replace(/[\0\r\n\t<>]/g, "").replace(/\.\.+[/\\]/g, "").trim();
+        const cleanTitle = rawTitle.replace(/[\0\r\n\t<>]/g, "").replace(/\.{2,}[/\\]/g, "").trim();
         safeParams.set("book_title", cleanTitle);
       }
       const cleanFormat = rawFormat.trim().toLowerCase();

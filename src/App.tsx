@@ -7,7 +7,7 @@ import { AbsUser, AbsActiveSession, Snippet, SyncState } from './types';
 import { wipeSessionKey } from './lib/crypto';
 import { authenticateAbs, fetchActiveSession, formatAuthors } from './lib/absClient';
 import { getStoredCredentials, saveStoredCredentials, clearStoredCredentials, sanitizeStoredUrl } from './lib/authStorage';
-import { safeSidecarFetch, stripTrailingSlash } from './lib/safeFetch';
+import { safeSidecarFetch } from './lib/safeFetch';
 import { CheckCircle2, X, Bell } from 'lucide-react';
 
 // Helper to determine initial default sidecar URL
@@ -24,8 +24,7 @@ function getDefaultSidecarUrl(): string {
 
 function stripHtmlChars(str: string): string {
   let res = '';
-  for (let i = 0; i < str.length; i++) {
-    const ch = str[i];
+  for (const ch of str) {
     if (ch !== '<' && ch !== '>' && ch !== '"' && ch !== "'") {
       res += ch;
     }
@@ -50,7 +49,8 @@ function isSafeDateChar(c: number): boolean {
 function isValidDateString(val: unknown): val is string {
   if (typeof val !== 'string' || !val || val.length > 50) return false;
   for (let i = 0; i < val.length; i++) {
-    if (!isSafeDateChar(val.charCodeAt(i))) {
+    const code = val.codePointAt(i);
+    if (code === undefined || !isSafeDateChar(code)) {
       return false;
     }
   }
@@ -151,7 +151,8 @@ function isSafeTimestampChar(c: number): boolean {
 function isValidTimestampString(rawTs: unknown): rawTs is string {
   if (typeof rawTs !== 'string' || !rawTs || rawTs.length > 100) return false;
   for (let i = 0; i < rawTs.length; i++) {
-    if (!isSafeTimestampChar(rawTs.charCodeAt(i))) {
+    const code = rawTs.codePointAt(i);
+    if (code === undefined || !isSafeTimestampChar(code)) {
       return false;
     }
   }
@@ -162,7 +163,7 @@ function parseRecentEventToast(recentList?: any[]): { id: string; message: strin
   if (!Array.isArray(recentList) || recentList.length === 0) {
     return null;
   }
-  const latestEvent: RecentBookmarkEvent = recentList[recentList.length - 1];
+  const latestEvent: RecentBookmarkEvent | undefined = recentList.at(-1);
   const rawTs = latestEvent?.timestamp;
   if (!isValidTimestampString(rawTs)) {
     return null;
@@ -180,7 +181,8 @@ function parseRecentEventToast(recentList?: any[]): { id: string; message: strin
 
 function isValidTimestampDateChars(str: string): boolean {
   for (let i = 0; i < 15; i++) {
-    const c = str.charCodeAt(i);
+    const c = str.codePointAt(i);
+    if (c === undefined) return false;
     if (i === 8) {
       if (c !== 95) return false;
     } else if (c < 48 || c > 57) {
@@ -205,7 +207,7 @@ function parseTimestampDate(timestampStr: string): number | null {
 }
 
 function parseDateCandidate(raw: unknown): number | null {
-  if (!raw) return null;
+  if (typeof raw !== 'string' && typeof raw !== 'number') return null;
   const str = String(raw);
   const t = new Date(str).getTime();
   if (!Number.isNaN(t)) return t;
@@ -219,6 +221,16 @@ export function parseBookmarkCreatedAt(b: any): number {
   const fromTimestamp = parseDateCandidate(b.timestamp);
   if (fromTimestamp !== null) return fromTimestamp;
   return Date.now();
+}
+
+function resolveExtractionStatus(status?: string, audioUrl?: string): 'success' | 'unavailable' {
+  if (status === 'unavailable') {
+    return 'unavailable';
+  }
+  if (audioUrl) {
+    return 'success';
+  }
+  return 'unavailable';
 }
 
 export function mapRawBookmarkToSnippet(
@@ -242,7 +254,7 @@ export function mapRawBookmarkToSnippet(
     markdownContent: `# ${b.book_title || 'Bookmark'}\n\n${b.transcript || ''}`,
     createdAt: parseBookmarkCreatedAt(b),
     username: b.username || fallbackUsername,
-    extractionStatus: b.extraction_status === 'unavailable' ? 'unavailable' : (b.audio_url ? 'success' : 'unavailable')
+    extractionStatus: resolveExtractionStatus(b.extraction_status, b.audio_url)
   };
 }
 
@@ -376,8 +388,8 @@ async function attemptSavedAutoConnect(
     actions.setActiveToken(authResult.token);
     actions.setIsAuthModalOpen(false);
 
-    actions.loadActiveSession(target.server, authResult.token, target.proxy);
-    actions.syncUserBookmarks(target.sidecar, authResult.token, authResult.user.username, target.proxy);
+    void actions.loadActiveSession(target.server, authResult.token, target.proxy);
+    void actions.syncUserBookmarks(target.sidecar, authResult.token, authResult.user.username, target.proxy);
   } catch (autoErr) {
     console.warn('Auto-reconnect with saved credentials notice:', autoErr);
     if (!isCancelled() && !actions.userRef.current) {
@@ -662,7 +674,7 @@ export function App() {
       });
     };
 
-    initializeConnection();
+    void initializeConnection();
 
     return () => {
       isCancelled = true;
@@ -740,18 +752,22 @@ export function App() {
         }
       );
       if (isSubscribed) {
-        timerId = setTimeout(pollStatus, delay);
+        timerId = setTimeout(() => {
+          void pollStatus();
+        }, delay);
       }
     };
 
     // Initial poll after short delay
-    timerId = setTimeout(pollStatus, 2500);
+    timerId = setTimeout(() => {
+      void pollStatus();
+    }, 2500);
 
     // Resume immediately when user focuses back on the tab
     const handleVisibilityChange = () => {
       if (typeof document !== 'undefined' && !document.hidden && isSubscribed) {
         if (timerId) clearTimeout(timerId);
-        pollStatus();
+        void pollStatus();
       }
     };
     document.addEventListener("visibilitychange", handleVisibilityChange);
@@ -903,7 +919,7 @@ export function App() {
             onSnippetCreated={handleSnippetCreated}
             onNavigateToLibrary={() => setActiveView('library')}
             onUseMockSession={() => {
-              handleConnect({
+              void handleConnect({
                 serverUrl,
                 sidecarUrl,
                 useProxy,

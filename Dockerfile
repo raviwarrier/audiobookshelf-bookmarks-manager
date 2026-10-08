@@ -18,15 +18,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # Install Python requirements with locked versions and pre-download transcription models (docker:S8541, docker:S8544)
-COPY --chown=appuser:appuser requirements.txt .
-RUN pip install --no-cache-dir --only-binary :all: -r requirements.txt \
-    && python3 -c "from faster_whisper import WhisperModel; WhisperModel('base.en', device='cpu', compute_type='int8')" \
-    && python3 -c "from vosk import Model; Model(model_name='vosk-model-small-en-us-0.15')" \
-    && chown -R appuser:appuser /app /data
+COPY --chown=root:root --chmod=644 requirements.txt .
+RUN pip install --no-cache-dir --only-binary :all: --require-hashes -r requirements.txt \
+    && python3 \
+        -c "from faster_whisper import WhisperModel; WhisperModel('base.en', device='cpu', compute_type='int8')" \
+    && python3 \
+        -c "from vosk import Model; Model(model_name='vosk-model-small-en-us-0.15')" \
+    && chown -R appuser:appuser /data /app/.cache
 
-# Copy application source, initialization scripts, and dashboard templates
-COPY --chown=appuser:appuser main.py init_installation_date.py ./
-COPY --chown=appuser:appuser templates/ ./templates/
+# Copy application source, initialization scripts, and dashboard templates (docker:S6504)
+COPY --chown=root:root --chmod=644 main.py init_installation_date.py ./
+COPY --chown=root:root --chmod=755 templates/ ./templates/
 
 # Switch to non-root user (docker:S6471)
 USER appuser

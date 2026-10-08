@@ -131,6 +131,7 @@ MSG_BOOKMARK_PREVIOUSLY_DELETED = "Bookmark was previously deleted by user"
 MSG_FFMPEG_NOT_INSTALLED = "ffmpeg is not installed or not found on the host system PATH. "
 UNKNOWN_AUTHOR_FALLBACK = "Unknown Author"
 UNKNOWN_CHAPTER_FALLBACK = "Unknown Chapter"
+UNKNOWN_BOOK_FALLBACK = "Unknown Book"
 MARKDOWN_TRANSCRIPT_HEADER = "## Transcript"
 MIME_TYPE_JSON = "application/json"
 
@@ -242,7 +243,7 @@ def sanitize_log_message(val: Any) -> str:
     """
     if val is None:
         return ""
-    clean = re.sub(r"[\r\n\x00-\x1f\x7f]", "", str(val)).strip()
+    clean = re.sub(r"[\x00-\x1f\x7f]", "", str(val)).strip()
     return clean[:256]
 
 # ==============================================================================
@@ -2131,7 +2132,7 @@ def _build_session_metadata(active: Dict[str, Any], target_offset: Optional[floa
     cur_time = float(active.get("currentTime") or 0.0)
     media_meta = active.get("mediaMetadata") or active.get("media", {}).get("metadata", {}) or {}
     display_title = active.get("displayTitle")
-    book_title = media_meta.get("title") or display_title or "Unknown Book"
+    book_title = media_meta.get("title") or display_title or UNKNOWN_BOOK_FALLBACK
     subtitle = media_meta.get("subtitle") or ""
     author = extract_authors(media_meta, UNKNOWN_AUTHOR_FALLBACK)
 
@@ -2267,8 +2268,8 @@ def _resolve_enriched_title_and_author(
 ) -> Tuple[str, str, str]:
     """Resolves enriched title, subtitle, and author."""
     book_title = current_meta.get("book_title")
-    if not book_title or book_title == "Unknown Book":
-        book_title = meta.get("title") or item_data.get("title") or "Unknown Book"
+    if not book_title or book_title == UNKNOWN_BOOK_FALLBACK:
+        book_title = meta.get("title") or item_data.get("title") or UNKNOWN_BOOK_FALLBACK
     subtitle = current_meta.get("subtitle") or meta.get("subtitle") or ""
     author = current_meta.get("author")
     if not author or author == UNKNOWN_AUTHOR_FALLBACK:
@@ -2436,7 +2437,7 @@ def resolve_audio_target(
         "file_path": host_file_path,
         "raw_container_path": file_path,
         "stream_url": stream_url,
-        "book_title": base_meta.get("book_title", "Unknown Book"),
+        "book_title": base_meta.get("book_title", UNKNOWN_BOOK_FALLBACK),
         "subtitle": base_meta.get("subtitle", ""),
         "author": base_meta.get("author", UNKNOWN_AUTHOR_FALLBACK),
         "chapter_name": base_meta.get("chapter_name", UNKNOWN_CHAPTER_FALLBACK),
@@ -3192,26 +3193,31 @@ def _record_recent_extraction(
 
 
 def _build_extraction_response(
-    real_output_dir: str,
     timestamp: str,
-    full_book_title: str,
-    safe_book_title: str,
-    author: str,
-    chapter_name: str,
-    current_time: float,
-    start_time: float,
-    effective_duration: int,
-    resolved_lib_item_id: str,
+    meta_info: Dict[str, Any],
+    timing_info: Dict[str, Any],
+    file_paths: Dict[str, str],
     user: Dict[str, Any],
-    target_user_name: str,
-    safe_username: str,
     transcript_body: str,
     engine_used: str,
-    output_mp3: str,
-    output_md: str,
-    output_json: str,
     is_intercepted_or_bookmark: bool
 ) -> Dict[str, Any]:
+    full_book_title = meta_info["full_book_title"]
+    safe_book_title = meta_info["safe_book_title"]
+    author = meta_info["author"]
+    chapter_name = meta_info["chapter_name"]
+    resolved_lib_item_id = meta_info["resolved_lib_item_id"]
+
+    current_time = timing_info["current_time"]
+    start_time = timing_info["start_time"]
+    effective_duration = timing_info["effective_duration"]
+
+    real_output_dir = file_paths["real_output_dir"]
+    target_user_name = file_paths["target_user_name"]
+    safe_username = file_paths["safe_username"]
+    output_mp3 = file_paths["output_mp3"]
+    output_json = file_paths["output_json"]
+
     formatted_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     bookmarked_duration_formatted = format_bookmarked_duration(current_time)
     snippet_length_formatted = f"{int(round(effective_duration))} seconds"
@@ -3259,7 +3265,7 @@ transcription_engine: "{engine_used}"
 
 {transcript_body}
 """
-    output_md = safe_write_text_file(real_output_dir, f"{timestamp}.md", md_content)
+    written_md_path = safe_write_text_file(real_output_dir, f"{timestamp}.md", md_content)
 
     meta_content = {
         "id": f"{safe_book_title}-{timestamp}",
@@ -3280,7 +3286,7 @@ transcription_engine: "{engine_used}"
         "raw_transcript": transcript_body,
         "audio_url": f"/bookmarks/{target_user_name}/{safe_book_title}/{timestamp}.mp3?v={int(os.path.getmtime(output_mp3)) if os.path.exists(output_mp3) else int(time.time())}",
         "md_url": f"/bookmarks/{target_user_name}/{safe_book_title}/{timestamp}.md",
-        "file_path": output_md,
+        "file_path": written_md_path,
         "mp3_path": output_mp3,
         "json_path": output_json,
         "extraction_method": "intercepted" if is_intercepted_or_bookmark else "manual",
@@ -3316,7 +3322,7 @@ transcription_engine: "{engine_used}"
             "duration": effective_duration,
             "snippet_length": snippet_length_formatted,
             "mp3_file": output_mp3,
-            "md_file": output_md,
+            "md_file": written_md_path,
             "transcript": full_transcript,
             "raw_transcript": transcript_body,
             "audio_url": f"/bookmarks/{safe_username}/{safe_book_title}/{timestamp}.mp3?v={int(os.path.getmtime(output_mp3)) if os.path.exists(output_mp3) else int(time.time())}",
@@ -3403,24 +3409,29 @@ def process_bookmark_extraction(
     transcript_body, engine_used = _transcribe_snippet_audio(output_mp3)
 
     return _build_extraction_response(
-        real_output_dir=real_output_dir,
         timestamp=timestamp,
-        full_book_title=full_book_title,
-        safe_book_title=safe_book_title,
-        author=session_state["author"],
-        chapter_name=session_state["chapter_name"],
-        current_time=current_time,
-        start_time=start_time,
-        effective_duration=effective_duration,
-        resolved_lib_item_id=resolved_lib_item_id,
+        meta_info={
+            "full_book_title": full_book_title,
+            "safe_book_title": safe_book_title,
+            "author": session_state["author"],
+            "chapter_name": session_state["chapter_name"],
+            "resolved_lib_item_id": resolved_lib_item_id,
+        },
+        timing_info={
+            "current_time": current_time,
+            "start_time": start_time,
+            "effective_duration": effective_duration,
+        },
+        file_paths={
+            "real_output_dir": real_output_dir,
+            "target_user_name": target_user_name,
+            "safe_username": safe_username,
+            "output_mp3": output_mp3,
+            "output_json": output_json,
+        },
         user=user,
-        target_user_name=target_user_name,
-        safe_username=safe_username,
         transcript_body=transcript_body,
         engine_used=engine_used,
-        output_mp3=output_mp3,
-        output_md=output_md,
-        output_json=output_json,
         is_intercepted_or_bookmark=bool(bookmark_data or is_intercepted)
     )
 

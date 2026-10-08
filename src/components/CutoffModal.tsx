@@ -18,7 +18,7 @@ interface CutoffModalProps {
 
 export function formatToSlashDate(dateStr?: string | null): string {
   if (!dateStr) return '';
-  return dateStr.slice(0, 10).split('-').join('/').split('.').join('/');
+  return dateStr.slice(0, 10).replaceAll('-', '/').replaceAll('.', '/');
 }
 
 function formatThreePartDate(p1: string, p2: string, p3: string): string {

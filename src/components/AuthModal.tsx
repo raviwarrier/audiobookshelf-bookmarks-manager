@@ -430,7 +430,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 required
                 value={serverUrl}
                 onChange={(e) => setServerUrl(e.target.value)}
-                placeholder="http://192.168.1.100:13378 or https://audiobooks.yourdomain.com"
+                placeholder="https://192.168.1.100:13378 or https://audiobooks.yourdomain.com"
                 className="w-full bg-[#181818] border border-neutral-700 hover:border-neutral-500 focus:border-neutral-300 focus:bg-[#202020] text-white px-3 py-2 text-xs focus:outline-none transition-colors font-mono"
               />
             </label>

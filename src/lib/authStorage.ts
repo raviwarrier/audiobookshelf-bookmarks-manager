@@ -8,8 +8,8 @@ function isValidIpv4Host(host: string): boolean {
   for (const part of parts) {
     if (part.length === 0 || part.length > 3) return false;
     for (let i = 0; i < part.length; i++) {
-      const code = part.charCodeAt(i);
-      if (code < 48 || code > 57) return false;
+      const code = part.codePointAt(i);
+      if (code === undefined || code < 48 || code > 57) return false;
     }
     const num = Number(part);
     if (num < 0 || num > 255) return false;
@@ -91,8 +91,8 @@ const INVALID_URL_CHAR_SET = new Set(['<', '>', '"', "'", '{', '}', '|', '\\', '
 
 function isInvalidUrlChars(str: string): boolean {
   for (let i = 0; i < str.length; i++) {
-    const code = str.charCodeAt(i);
-    if (code <= 31 || code === 127 || INVALID_URL_CHAR_SET.has(str[i])) {
+    const code = str.codePointAt(i);
+    if (code === undefined || code <= 31 || code === 127 || INVALID_URL_CHAR_SET.has(str[i])) {
       return true;
     }
   }
@@ -110,7 +110,8 @@ function isForbiddenHost(host: string): boolean {
 
 function isValidHostChars(host: string): boolean {
   for (let i = 0; i < host.length; i++) {
-    const code = host.charCodeAt(i);
+    const code = host.codePointAt(i);
+    if (code === undefined) return false;
     const isAlphaNum =
       (code >= 48 && code <= 57) ||
       (code >= 65 && code <= 90) ||

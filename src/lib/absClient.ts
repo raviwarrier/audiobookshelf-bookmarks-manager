@@ -145,8 +145,7 @@ function stripBearerPrefix(token: string): string {
     t = t.slice(7).trim();
   }
   let cleaned = '';
-  for (let i = 0; i < t.length; i++) {
-    const ch = t[i];
+  for (const ch of t) {
     if (ch !== '"' && ch !== "'") {
       cleaned += ch;
     }
@@ -351,7 +350,7 @@ async function fetchLatestMediaProgress(
   cleanUrl: string,
   token: string,
   useProxy: boolean
-): Promise<any | null> {
+): Promise<Record<string, any> | null> {
   const meRes = await absFetch(
     `${cleanUrl}/api/me`,
     { method: 'GET', headers: { Authorization: `Bearer ${token}` } },

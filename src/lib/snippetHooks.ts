@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useMemo, FormEvent } from 'react';
 import { Snippet, SyncState, CutoffMode } from '../types';
-import { safeSidecarFetch, stripTrailingSlash } from './safeFetch';
+import { safeSidecarFetch } from './safeFetch';
 import { formatToSlashDate, normalizeToIsoDate } from '../components/CutoffModal';
 
 function isValidTimestampDateChars(str: string): boolean {
   for (let i = 0; i < 15; i++) {
-    const c = str.charCodeAt(i);
+    const c = str.codePointAt(i);
+    if (c === undefined) return false;
     if (i === 8) {
       if (c !== 95) return false;
     } else if (c < 48 || c > 57) {
@@ -494,13 +495,13 @@ export function useSnippetOperations(
   }, [openExportDropdownId]);
 
   const handleCopyTranscript = (id: string, text: string) => {
-    navigator.clipboard.writeText(text);
+    void navigator.clipboard.writeText(text);
     setCopiedId(id);
     setTimeout(() => setCopiedId(null), 2000);
   };
 
   const handleCopyCitation = (snippet: Snippet) => {
-    navigator.clipboard.writeText(formatCitationText(snippet));
+    void navigator.clipboard.writeText(formatCitationText(snippet));
     setCopiedCitationId(snippet.id);
     setTimeout(() => setCopiedCitationId(null), 2500);
   };
