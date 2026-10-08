@@ -1778,6 +1778,15 @@ This document tracks all security, reliability, and maintainability fixes applie
     - Updated `absFetch` in `src/lib/absClient.ts` to defensively parse stringified JSON responses.
     - Aligned token verification to query `GET /api/authorize` (Audiobookshelf's documented endpoint) before attempting `POST`, restoring automatic detection of user profiles (`@ravi`) and listening sessions.
 
+119. **Complete Typing Imports in Sidecar (`main.py`)**
+    - Added missing `Set` and `Union` to `from typing import ...` in `main.py`, resolving `NameError: name 'Set' is not defined` at line 4459.
+    - Verified via AST parser that all type annotations across `main.py` are imported.
+
+120. **Comprehensive Symbol & Scope Audit (`main.py`)**
+    - Added `from __future__ import annotations` at the top of `main.py` so all type annotations are evaluated lazily (PEP 563), eliminating future annotation `NameError` risks during module evaluation.
+    - Fixed undefined `final_lib_id` and `final_time` references in `delete_user_bookmark` by referencing resolved `tombstone_meta["lib_id"]` and `tombstone_meta["book_time"]`.
+    - Performed full AST and Python symbol table (`symtable`) static scope resolution audit across all Python files (`main.py`, `setup.py`, `init_installation_date.py`), verifying 0 unresolved global or local references.
+
 
 
 

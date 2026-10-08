@@ -5,6 +5,8 @@ Extracts audio clips via ffmpeg, transcribes speech with faster-whisper,
 and manages per-user bookmarks and snippets under {username}/bookmarks.
 """
 
+from __future__ import annotations
+
 import os
 import sys
 
@@ -26,7 +28,7 @@ import subprocess
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any, List, Tuple, Callable
+from typing import Optional, Dict, Any, List, Tuple, Callable, Set, Union
 from urllib.parse import quote_plus, quote, urlsplit
 
 try:
@@ -5539,8 +5541,8 @@ async def delete_user_bookmark(
         await _delete_upstream_abs_bookmark(
             server_url=server_url,
             raw_token=raw_token,
-            target_lib_id=final_lib_id,
-            target_time=final_time
+            target_lib_id=tombstone_meta["lib_id"],
+            target_time=tombstone_meta["book_time"]
         )
 
     return {
