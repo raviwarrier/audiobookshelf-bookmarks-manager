@@ -37,6 +37,8 @@ export interface AbsActiveSession {
   duration?: number;
   coverPath?: string;
   bookmarks?: AbsBookmark[];
+  isLiveSession?: boolean;
+  source?: string;
 }
 
 export interface Snippet {

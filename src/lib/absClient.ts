@@ -374,18 +374,90 @@ async function fetchLatestMediaProgress(
   token: string,
   useProxy: boolean
 ): Promise<Record<string, any> | null> {
-  const meRes = await absFetch(
-    `${cleanUrl}/api/me`,
-    { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
-    useProxy
-  );
-  if (!meRes.ok || !meRes.data) return null;
+  // 1. Try /api/me/items-in-progress (Audiobookshelf official continue-listening endpoint)
+  try {
+    const inProgRes = await absFetch(
+      `${cleanUrl}/api/me/items-in-progress`,
+      { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
+      useProxy
+    );
+    if (inProgRes.ok && inProgRes.data) {
+      const items = Array.isArray(inProgRes.data) ? inProgRes.data : inProgRes.data.items ?? [];
+      if (Array.isArray(items) && items.length > 0) {
+        const first = items[0];
+        const prog = first.userMediaProgress || first.mediaProgress || {};
+        return {
+          libraryItemId: first.id || prog.libraryItemId,
+          currentTime: prog.currentTime ?? 0,
+          duration: prog.duration ?? first.media?.duration,
+          lastUpdate: prog.lastUpdate ?? Date.now(),
+          itemData: first,
+        };
+      }
+    }
+  } catch {
+    // continue to next candidate
+  }
 
-  const progressList = meRes.data.user?.mediaProgress ?? meRes.data.mediaProgress ?? [];
-  if (!Array.isArray(progressList) || progressList.length === 0) return null;
+  // 2. Try /api/authorize (official verification endpoint for API tokens)
+  try {
+    const authRes = await absFetch(
+      `${cleanUrl}/api/authorize`,
+      { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
+      useProxy
+    );
+    if (authRes.ok && authRes.data) {
+      const progressList = authRes.data.user?.mediaProgress ?? authRes.data.mediaProgress ?? [];
+      if (Array.isArray(progressList) && progressList.length > 0) {
+        const sorted = [...progressList].sort((a: any, b: any) => (b.lastUpdate || 0) - (a.lastUpdate || 0));
+        return sorted[0];
+      }
+    }
+  } catch {
+    // continue to next candidate
+  }
 
-  progressList.sort((a: any, b: any) => (b.lastUpdate || 0) - (a.lastUpdate || 0));
-  return progressList[0];
+  // 3. Try /api/me (standard session endpoint)
+  try {
+    const meRes = await absFetch(
+      `${cleanUrl}/api/me`,
+      { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
+      useProxy
+    );
+    if (meRes.ok && meRes.data) {
+      const progressList = meRes.data.user?.mediaProgress ?? meRes.data.mediaProgress ?? [];
+      if (Array.isArray(progressList) && progressList.length > 0) {
+        const sorted = [...progressList].sort((a: any, b: any) => (b.lastUpdate || 0) - (a.lastUpdate || 0));
+        return sorted[0];
+      }
+    }
+  } catch {
+    // continue to next candidate
+  }
+
+  // 4. Try /api/me/bookmarks (if user has bookmarks created on mobile/web)
+  try {
+    const bRes = await absFetch(
+      `${cleanUrl}/api/me/bookmarks`,
+      { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
+      useProxy
+    );
+    if (bRes.ok && bRes.data) {
+      const bList = Array.isArray(bRes.data) ? bRes.data : bRes.data.bookmarks ?? [];
+      if (Array.isArray(bList) && bList.length > 0) {
+        const sorted = [...bList].sort((a: any, b: any) => (b.createdAt || 0) - (a.createdAt || 0));
+        return {
+          libraryItemId: sorted[0].libraryItemId,
+          currentTime: sorted[0].time ?? 0,
+          lastUpdate: sorted[0].createdAt ?? Date.now(),
+        };
+      }
+    }
+  } catch {
+    // continue
+  }
+
+  return null;
 }
 
 function buildSessionFromMediaItem(item: any, latest: any): AbsActiveSession {
@@ -408,6 +480,8 @@ function buildSessionFromMediaItem(item: any, latest: any): AbsActiveSession {
     audioFilePath: resolveRealAudioFilePath(media, item, null, curTime),
     duration: latest.duration ?? media.duration,
     bookmarks: latest.bookmarks ?? media.bookmarks ?? [],
+    isLiveSession: false,
+    source: 'in_progress',
   };
 }
 
@@ -418,7 +492,11 @@ async function queryFallbackMediaProgress(
 ): Promise<AbsActiveSession | null> {
   try {
     const latest = await fetchLatestMediaProgress(cleanUrl, token, useProxy);
-    if (!latest) return null;
+    if (!latest || !latest.libraryItemId) return null;
+
+    if (latest.itemData && latest.itemData.media) {
+      return buildSessionFromMediaItem(latest.itemData, latest);
+    }
 
     const itemRes = await absFetch(
       `${cleanUrl}/api/items/${latest.libraryItemId}?expanded=1`,
@@ -526,57 +604,69 @@ export async function fetchActiveSession(
 ): Promise<AbsActiveSession> {
   const cleanUrl = stripTrailingSlash(serverUrl);
 
-  const res = await absFetch(
-    `${cleanUrl}/api/me/listening-sessions`,
-    {
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${token}`,
+  let sessions: any[] = [];
+  try {
+    const res = await absFetch(
+      `${cleanUrl}/api/me/listening-sessions`,
+      {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
       },
-    },
-    useProxy
-  );
+      useProxy
+    );
 
-  if (!res.ok) {
-    throw new Error(`Failed to fetch listening sessions (HTTP ${res.status})`);
+    if (res.ok && res.data) {
+      sessions = Array.isArray(res.data) ? res.data : res.data.sessions ?? [];
+    }
+  } catch {
+    // Non-fatal: /api/me/listening-sessions might not be supported or allowed for API token auth
   }
 
-  const data = res.data;
-  const sessions = Array.isArray(data) ? data : data.sessions ?? [];
+  if (sessions.length > 0) {
+    const active = sessions[0];
+    const libraryItemId = active.libraryItemId ?? active.id;
+    const curTime = Math.floor(active.currentTime ?? 0);
 
-  if (sessions.length === 0) {
-    const fallback = await queryFallbackMediaProgress(cleanUrl, token, useProxy);
-    if (fallback) return fallback;
-    throw new Error('No active listening sessions found on Audiobookshelf. Start playing an audiobook on Audiobookshelf first.');
+    const meta = buildInitialSessionMetadata(active);
+
+    if (libraryItemId) {
+      await enrichSessionFromItem(cleanUrl, libraryItemId, token, useProxy, curTime, active.audioTrack, meta);
+    }
+
+    if (!meta.audioFilePath) {
+      meta.audioFilePath = resolveRealAudioFilePath(active.media, active.libraryItem, active.audioTrack, curTime);
+    }
+
+    return {
+      libraryItemId: libraryItemId ?? 'item_default',
+      episodeId: active.episodeId ?? null,
+      bookTitle: meta.bookTitle,
+      subtitle: meta.subtitle,
+      author: meta.author,
+      chapterName: meta.chapterName,
+      currentTime: curTime,
+      audioFilePath: meta.audioFilePath,
+      duration: meta.duration,
+      coverPath: meta.coverPath,
+      bookmarks: meta.bookmarks,
+      isLiveSession: true,
+      source: 'listening_session',
+    };
   }
 
-  const active = sessions[0];
-  const libraryItemId = active.libraryItemId ?? active.id;
-  const curTime = Math.floor(active.currentTime ?? 0);
-
-  const meta = buildInitialSessionMetadata(active);
-
-  if (libraryItemId) {
-    await enrichSessionFromItem(cleanUrl, libraryItemId, token, useProxy, curTime, active.audioTrack, meta);
+  // Gracefully fallback to in-progress or recently bookmarked media
+  const fallback = await queryFallbackMediaProgress(cleanUrl, token, useProxy);
+  if (fallback) {
+    return {
+      ...fallback,
+      isLiveSession: false,
+      source: 'in_progress',
+    };
   }
 
-  if (!meta.audioFilePath) {
-    meta.audioFilePath = resolveRealAudioFilePath(active.media, active.libraryItem, active.audioTrack, curTime);
-  }
-
-  return {
-    libraryItemId: libraryItemId ?? 'item_default',
-    episodeId: active.episodeId ?? null,
-    bookTitle: meta.bookTitle,
-    subtitle: meta.subtitle,
-    author: meta.author,
-    chapterName: meta.chapterName,
-    currentTime: curTime,
-    audioFilePath: meta.audioFilePath,
-    duration: meta.duration,
-    coverPath: meta.coverPath,
-    bookmarks: meta.bookmarks,
-  };
+  throw new Error('No active listening sessions or in-progress audiobooks found on Audiobookshelf. Start playing an audiobook on Audiobookshelf first.');
 }
 
 /**

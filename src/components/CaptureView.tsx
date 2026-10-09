@@ -401,21 +401,28 @@ const CaptureConnectedBar: React.FC<CaptureConnectedBarProps> = ({
 interface CaptureSessionNoticeProps {
   sessionError: string | null;
   serverUrl: string;
+  username?: string;
   onRefreshSession: () => Promise<void>;
 }
 
 const CaptureSessionNotice: React.FC<CaptureSessionNoticeProps> = ({
   sessionError,
   serverUrl,
+  username,
   onRefreshSession,
 }) => {
   if (!sessionError) return null;
   return (
     <div className="p-4 bg-[#121212] border border-neutral-700 text-xs text-neutral-200 flex items-start gap-3">
-      <AlertCircle className="w-4 h-4 shrink-0 text-white mt-0.5" />
+      <AlertCircle className="w-4 h-4 shrink-0 text-amber-400 mt-0.5" />
       <div className="space-y-1">
         <div className="font-semibold text-white">Audiobookshelf Listening Session Notice</div>
         <div className="text-neutral-300">{sessionError}</div>
+        {username && (
+          <div className="text-[11px] text-neutral-400 pt-0.5">
+            Connected as <span className="text-white font-medium">@{username}</span>. Play an audiobook on Audiobookshelf or create a bookmark in your mobile app to begin capturing.
+          </div>
+        )}
         <div className="pt-2 flex items-center gap-3">
           <button
             type="button"
@@ -476,10 +483,15 @@ const ActiveSessionParametersPanel: React.FC<ActiveSessionParametersPanelProps> 
   <section className="border border-neutral-700 bg-[#0d0d0d] p-5 space-y-4">
     <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-neutral-800 gap-2">
       <div className="flex items-center gap-2">
-        <Radio className="w-4 h-4 text-white" />
+        <Radio className={`w-4 h-4 ${session.isLiveSession ? 'text-emerald-400 animate-pulse' : 'text-neutral-400'}`} />
         <h2 className="text-sm font-semibold tracking-tight text-white uppercase">
-          Active Audiobook Session
+          {session.isLiveSession ? 'Active Live Listening Session' : 'Current / In-Progress Audiobook'}
         </h2>
+        {!session.isLiveSession && (
+          <span className="text-[10px] font-mono px-1.5 py-0.5 bg-neutral-800 text-neutral-300 border border-neutral-700">
+            {session.source === 'recent_bookmark' ? 'From Recent Bookmark' : 'In-Progress'}
+          </span>
+        )}
       </div>
       <div className="flex items-center gap-2 text-xs text-neutral-400">
         <span>Bookmarked Duration:</span>
@@ -727,6 +739,7 @@ export const CaptureView: React.FC<CaptureViewProps> = ({
       <CaptureSessionNotice
         sessionError={sessionError}
         serverUrl={serverUrl}
+        username={user?.username}
         onRefreshSession={onRefreshSession}
       />
 

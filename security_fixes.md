@@ -1792,6 +1792,12 @@ This document tracks all security, reliability, and maintainability fixes applie
     - Added an async context manager `_open_websocket` that inspects `websockets.connect` parameter signatures to dynamically select `extra_headers` on `websockets <= 12` vs `additional_headers` on `websockets >= 13`, with an automatic runtime fallback on `TypeError`.
     - Prevents Socket.IO connection drops and 30-67s reconnection loops against upstream Audiobookshelf servers.
 
+122. **API Token Active Session & Multi-Endpoint In-Progress Fallback (`absClient.ts`, `App.tsx`, `CaptureView.tsx`)**
+    - Updated `fetchActiveSession` so that API token requests do not fail if `/api/me/listening-sessions` is unavailable or returns 401/404 (as occurs when not actively streaming in a browser).
+    - Expanded `fetchLatestMediaProgress` to query multiple Audiobookshelf progress sources: `/api/me/items-in-progress`, `/api/authorize` (official for API tokens), `/api/me`, and `/api/me/bookmarks`.
+    - Added automated session derivation from recent synced bookmarks and sidecar snippets in `App.tsx` so that when a bookmark is created on mobile, the Capture/Snip view immediately populates with the audiobook's metadata and slicing controls.
+    - Updated `CaptureView` to display clear status badges (`Live Session` vs `From Recent Bookmark` / `In-Progress`) and helpful connection guidance confirming `@username`.
+
 
 
 

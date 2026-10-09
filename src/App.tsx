@@ -491,6 +491,9 @@ export function App() {
 
   // Active Listening Session
   const [session, setSession] = useState<AbsActiveSession | null>(null);
+  const sessionRef = useRef<AbsActiveSession | null>(null);
+  sessionRef.current = session;
+
   const [isLoadingSession, setIsLoadingSession] = useState<boolean>(false);
   const [sessionError, setSessionError] = useState<string | null>(null);
 
@@ -503,6 +506,8 @@ export function App() {
 
   // Snippets library state
   const [snippets, setSnippets] = useState<Snippet[]>([]);
+  const snippetsRef = useRef<Snippet[]>([]);
+  snippetsRef.current = snippets;
   const [isLoadingBookmarks, setIsLoadingBookmarks] = useState<boolean>(false);
 
   // Background Sync state
@@ -550,6 +555,29 @@ export function App() {
           mapRawBookmarkToSnippet(b, targetSidecar, proxyEnabled, username)
         );
         setSnippets(sidecarBookmarks);
+        snippetsRef.current = sidecarBookmarks;
+
+        // If no active session was loaded from live streams or in-progress progress,
+        // automatically populate from the user's latest bookmark so the capture view is immediately usable!
+        if (!sessionRef.current && sidecarBookmarks.length > 0) {
+          const top = sidecarBookmarks[0];
+          const derivedSession: AbsActiveSession = {
+            libraryItemId: top.libraryItemId || top.id,
+            bookTitle: top.bookTitle || 'Recent Audiobook',
+            subtitle: top.subtitle || '',
+            author: top.author || 'Unknown Author',
+            chapterName: top.chapterName || 'Bookmarked Chapter',
+            currentTime: top.currentTime ?? top.startTime ?? 0,
+            audioFilePath: top.audioUrl || '',
+            duration: top.duration || 0,
+            bookmarks: [],
+            isLiveSession: false,
+            source: 'recent_bookmark',
+          };
+          setSession(derivedSession);
+          sessionRef.current = derivedSession;
+          setSessionError(null);
+        }
 
         // Update latest known timestamp
         if (sidecarBookmarks[0]?.timestamp) {
@@ -575,9 +603,31 @@ export function App() {
     try {
       const active = await fetchActiveSession(targetServer, token, proxyEnabled);
       setSession(active);
+      sessionRef.current = active;
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Could not fetch active listening session';
-      setSessionError(msg);
+      // Fallback to recent bookmark from available snippets if live session / progress query returned empty
+      if (snippetsRef.current && snippetsRef.current.length > 0) {
+        const top = snippetsRef.current[0];
+        const derivedSession: AbsActiveSession = {
+          libraryItemId: top.libraryItemId || top.id,
+          bookTitle: top.bookTitle || 'Recent Audiobook',
+          subtitle: top.subtitle || '',
+          author: top.author || 'Unknown Author',
+          chapterName: top.chapterName || 'Bookmarked Chapter',
+          currentTime: top.currentTime ?? top.startTime ?? 0,
+          audioFilePath: top.audioUrl || '',
+          duration: top.duration || 0,
+          bookmarks: [],
+          isLiveSession: false,
+          source: 'recent_bookmark',
+        };
+        setSession(derivedSession);
+        sessionRef.current = derivedSession;
+        setSessionError(null);
+      } else {
+        const msg = err instanceof Error ? err.message : 'Could not fetch active listening session';
+        setSessionError(msg);
+      }
     } finally {
       setIsLoadingSession(false);
     }
