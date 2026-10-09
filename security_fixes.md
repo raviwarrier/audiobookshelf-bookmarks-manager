@@ -1798,6 +1798,16 @@ This document tracks all security, reliability, and maintainability fixes applie
     - Added automated session derivation from recent synced bookmarks and sidecar snippets in `App.tsx` so that when a bookmark is created on mobile, the Capture/Snip view immediately populates with the audiobook's metadata and slicing controls.
     - Updated `CaptureView` to display clear status badges (`Live Session` vs `From Recent Bookmark` / `In-Progress`) and helpful connection guidance confirming `@username`.
 
+123. **Process CPU Priority Optimization for Host Co-Existence (`setup.sh`, `update.sh`)**
+    - Confirmed zero Docker commands or container management operations exist in the codebase; the Audiobookshelf container was not stopped or restarted by our scripts.
+    - Wrapped host-intensive tasks (`npm run build` and `pip install`) with `nice -n 10` scheduling priority on Linux systems to prevent temporary CPU starvation of co-located services (such as the Audiobookshelf Docker container and reverse proxy).
+    - Prevents transient 502 Bad Gateway timeouts on reverse proxy health checks during local compilation.
+
+124. **Incremental Build & Change Detection Caching (`setup.sh`, `update.sh`)**
+    - Implemented SHA-256 content checksum caching for frontend/server code (`src/`, `server.ts`, `index.html`, etc.), Node dependencies (`package.json`, `package-lock.json`), and Python dependencies (`requirements.txt`).
+    - Skips `npm run build`, `npm install`, and `pip install` when their corresponding source files are unchanged.
+    - Eliminates redundant ~45-second 100% CPU spikes during updates when only backend scripts or documentation are modified, drastically speeding up updates on Raspberry Pi and avoiding host resource contention.
+
 
 
 

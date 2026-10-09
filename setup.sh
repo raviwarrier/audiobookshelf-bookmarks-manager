@@ -18,6 +18,12 @@ NC='\033[0m' # No Color
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+if [[ $EUID -ne 0 ]] && command -v sudo &>/dev/null; then
+    SUDO="sudo"
+else
+    SUDO=""
+fi
+
 echo -e "\n${BOLD}${CYAN}=================================================================${NC}"
 echo -e "${BOLD}${CYAN}   Audiobookshelf Bookmarks Manager - Server Configuration${NC}"
 echo -e "${BOLD}${CYAN}=================================================================${NC}\n"
@@ -209,8 +215,8 @@ if [[ ! -f "$VENV_DIR/bin/python3" ]]; then
     if ! python3 -m venv "$VENV_DIR" 2>/dev/null; then
         echo -e "   ${YELLOW}python3 -m venv failed. Attempting to install python3-venv via apt...${NC}"
         if command -v apt-get &>/dev/null; then
-            sudo apt-get update && sudo apt-get install -y python3-venv python3-pip
-            python3 -m venv "$VENV_DIR"
+            $SUDO apt-get update && $SUDO apt-get install -y python3-venv python3-pip
+            python3 -m venv "$VENV_DIR" 2>/dev/null || true
         fi
     fi
 fi
@@ -221,7 +227,7 @@ if [[ -f "$VENV_DIR/bin/python3" ]]; then
     if command -v apt-get &>/dev/null; then
         if ! command -v pkg-config &>/dev/null || ! pkg-config --exists libavformat libavcodec libavutil 2>/dev/null; then
             echo -e "   ${YELLOW}Installing FFmpeg build headers (pkg-config, libav*-dev) for PyAV compilation...${NC}"
-            sudo apt-get update && sudo apt-get install -y \
+            $SUDO apt-get update && $SUDO apt-get install -y \
                 ffmpeg \
                 pkg-config \
                 libavformat-dev \
@@ -235,13 +241,28 @@ if [[ -f "$VENV_DIR/bin/python3" ]]; then
                 build-essential
         fi
     fi
-    echo -e "   Installing Python packages from requirements.txt..."
-    $VENV_PYTHON -m pip install --upgrade pip 2>/dev/null || true
-    CLEAN_REQ="$(mktemp)"
-    awk '/==/ && !/^[[:space:]]*--/ {sub(/\\$/, ""); print $1}' "$SCRIPT_DIR/requirements.txt" > "$CLEAN_REQ"
-    $VENV_PYTHON -m pip install -r "$CLEAN_REQ"
-    rm -f "$CLEAN_REQ"
-    echo -e "   ${GREEN}✓ Python packages installed successfully in venv.${NC}"
+    REQ_HASH_FILE="$VENV_DIR/.requirements_hash"
+    CURRENT_REQ_HASH=""
+    if command -v sha256sum &>/dev/null; then
+        CURRENT_REQ_HASH=$(sha256sum "$SCRIPT_DIR/requirements.txt" 2>/dev/null | awk '{print $1}')
+    fi
+
+    if [[ -n "$CURRENT_REQ_HASH" && -f "$REQ_HASH_FILE" && "$(cat "$REQ_HASH_FILE" 2>/dev/null)" == "$CURRENT_REQ_HASH" ]]; then
+        echo -e "   ${GREEN}✓ Python packages are unchanged. Skipping pip install.${NC}"
+    else
+        echo -e "   Installing Python packages from requirements.txt..."
+        $VENV_PYTHON -m pip install --upgrade pip 2>/dev/null || true
+        CLEAN_REQ="$(mktemp)"
+        awk '/==/ && !/^[[:space:]]*--/ {sub(/\\$/, ""); print $1}' "$SCRIPT_DIR/requirements.txt" > "$CLEAN_REQ"
+        if command -v nice &>/dev/null; then
+            nice -n 10 $VENV_PYTHON -m pip install -r "$CLEAN_REQ"
+        else
+            $VENV_PYTHON -m pip install -r "$CLEAN_REQ"
+        fi
+        rm -f "$CLEAN_REQ"
+        [[ -n "$CURRENT_REQ_HASH" ]] && echo "$CURRENT_REQ_HASH" > "$REQ_HASH_FILE"
+        echo -e "   ${GREEN}✓ Python packages installed successfully in venv.${NC}"
+    fi
 else
     echo -e "   ${YELLOW}[!] Warning: Could not create venv. Falling back to system python3.${NC}"
     VENV_PYTHON="python3"
@@ -249,10 +270,41 @@ fi
 
 # 10. Node Dependencies & Build
 if command -v npm &>/dev/null; then
-    echo -e "\n${BLUE}[*] Installing Node dependencies and building web dashboard...${NC}"
-    npm install --ignore-scripts
-    npm run build
-    echo -e "   ${GREEN}✓ Web dashboard and server compiled to dist/server.js.${NC}"
+    # Check if npm dependencies changed
+    NODE_DEPS_HASH_FILE="$SCRIPT_DIR/node_modules/.deps_hash"
+    CURRENT_DEPS_HASH=""
+    if command -v sha256sum &>/dev/null; then
+        CURRENT_DEPS_HASH=$(sha256sum "$SCRIPT_DIR/package.json" "$SCRIPT_DIR/package-lock.json" 2>/dev/null | sha256sum | awk '{print $1}')
+    fi
+
+    if [[ -d "$SCRIPT_DIR/node_modules" && -n "$CURRENT_DEPS_HASH" && -f "$NODE_DEPS_HASH_FILE" && "$(cat "$NODE_DEPS_HASH_FILE" 2>/dev/null)" == "$CURRENT_DEPS_HASH" ]]; then
+        echo -e "   ${GREEN}✓ Node dependencies are unchanged. Skipping npm install.${NC}"
+    else
+        echo -e "\n${BLUE}[*] Installing Node dependencies...${NC}"
+        npm install --ignore-scripts
+        [[ -n "$CURRENT_DEPS_HASH" ]] && echo "$CURRENT_DEPS_HASH" > "$NODE_DEPS_HASH_FILE"
+    fi
+
+    # Check if frontend / server source code changed
+    BUILD_HASH_FILE="$SCRIPT_DIR/dist/.build_hash"
+    CURRENT_BUILD_HASH=""
+    if command -v sha256sum &>/dev/null; then
+        CURRENT_BUILD_HASH=$(find src server.ts index.html package.json vite.config.ts tsconfig.json -type f 2>/dev/null -exec sha256sum {} + | sort | sha256sum | awk '{print $1}')
+    fi
+
+    if [[ -f "$BUILD_HASH_FILE" && -f "$SCRIPT_DIR/dist/server.js" && -f "$SCRIPT_DIR/dist/index.html" && -n "$CURRENT_BUILD_HASH" && "$(cat "$BUILD_HASH_FILE" 2>/dev/null)" == "$CURRENT_BUILD_HASH" ]]; then
+        echo -e "   ${GREEN}✓ Web dashboard & server bundle are up to date (no code changes detected). Skipping build.${NC}"
+    else
+        echo -e "\n${BLUE}[*] Code changes detected. Building web dashboard and server...${NC}"
+        if command -v nice &>/dev/null; then
+            nice -n 10 npm run build
+        else
+            npm run build
+        fi
+        mkdir -p "$SCRIPT_DIR/dist"
+        [[ -n "$CURRENT_BUILD_HASH" ]] && echo "$CURRENT_BUILD_HASH" > "$BUILD_HASH_FILE"
+        echo -e "   ${GREEN}✓ Web dashboard and server compiled to dist/server.js.${NC}"
+    fi
 fi
 
 # 11. Record dynamic installation date & cutoff (first install only, before app start)
