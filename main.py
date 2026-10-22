@@ -1201,7 +1201,7 @@ async def lifespan(app_instance: FastAPI):
 app = FastAPI(
     title="Audiobookshelf Bookmarks Manager",
     description="Autonomous manager, real-time listener, and automated bookmark audio clipper & transcriber for Audiobookshelf.",
-    version="2.1.0",
+    version="2.2.1",
     lifespan=lifespan
 )
 
@@ -3041,11 +3041,72 @@ def _find_user_volume_dir(safe_username: str) -> Tuple[str, str]:
     return VOLUME_DIR, safe_username
 
 
+def _remove_prior_bookmark_snippets(
+    real_output_dir: str,
+    keep_timestamp: str,
+    replace_timestamp: Optional[str] = None,
+    current_time: Optional[float] = None,
+    window_seconds: float = 15.0
+) -> None:
+    """
+    Ensures that when a snippet is extended or updated, any older/duplicate snippet
+    for the exact same bookmark anchor time is completely removed from disk.
+    Prevents duplicate snippets of the same piece of audiobook.
+    """
+    if not os.path.isdir(real_output_dir):
+        return
+
+    # 1. Remove explicit replace_timestamp if different from keep_timestamp
+    if replace_timestamp and replace_timestamp != keep_timestamp:
+        safe_ts = validate_and_sanitize_snippet_timestamp(replace_timestamp)
+        for ext in ("mp3", "md", "json"):
+            safe_remove_file_in_directory(real_output_dir, f"{safe_ts}.{ext}")
+
+    # 2. Check all JSON metadata files in the book folder for existing snippets at the same bookmark time
+    if current_time is None or current_time < 0:
+        return
+
+    try:
+        entries = os.listdir(real_output_dir)
+    except OSError:
+        return
+
+    for fname in entries:
+        if not fname.endswith(JSON_FILE_EXTENSION) or fname.startswith("."):
+            continue
+        base_name = fname[:-5]
+        if base_name == keep_timestamp:
+            continue
+
+        meta = safe_read_json_file(real_output_dir, fname)
+        if not meta or not isinstance(meta, dict):
+            continue
+
+        snip_cur = float(meta.get("current_time", -999.0))
+        snip_start = float(meta.get("start_time", -999.0))
+        snip_dur = float(meta.get("duration", 60.0))
+
+        is_match = False
+        if abs(snip_cur - current_time) <= window_seconds:
+            is_match = True
+        elif snip_start >= 0 and (snip_start - 5.0) <= current_time <= (snip_start + snip_dur + 5.0):
+            is_match = True
+
+        if is_match:
+            logger.info(
+                f"[Snippet Extension] Replacing old snippet [{base_name}] "
+                f"(anchor={snip_cur}s) with new extended snippet [{keep_timestamp}] (anchor={current_time}s)"
+            )
+            for ext in ("mp3", "md", "json"):
+                safe_remove_file_in_directory(real_output_dir, f"{base_name}.{ext}")
+
+
 def _prepare_snippet_output_paths(
     safe_username: str,
     safe_book_title: str,
     timestamp: str,
-    replace_timestamp: Optional[str],
+    replace_timestamp: Optional[str] = None,
+    current_time: Optional[float] = None,
 ) -> Tuple[str, str, str, str, str]:
     target_base, target_user_name = _find_user_volume_dir(safe_username)
     output_dir = os.path.join(target_base, target_user_name, "bookmarks", safe_book_title)
@@ -3061,10 +3122,12 @@ def _prepare_snippet_output_paths(
         if os.path.commonpath([real_output_dir, real_file]) != real_output_dir:
             raise ValueError("Security violation: resolved output path escapes user bookmarks directory.")
 
-    if replace_timestamp:
-        safe_target_ts = validate_and_sanitize_snippet_timestamp(replace_timestamp)
-        for ext in ("mp3", "md", "json"):
-            safe_remove_file_in_directory(real_output_dir, f"{safe_target_ts}.{ext}")
+    _remove_prior_bookmark_snippets(
+        real_output_dir=real_output_dir,
+        keep_timestamp=timestamp,
+        replace_timestamp=replace_timestamp,
+        current_time=current_time
+    )
 
     return real_output_dir, target_user_name, output_mp3, output_md, output_json
 
@@ -3173,19 +3236,145 @@ def _extract_snippet_audio(
     )
 
 
+def clean_hallucinated_repetitions(text: str) -> str:
+    """
+    Detects and eliminates Whisper autoregressive repetition loops, stuttering loops,
+    and trailing hallucinated phrase repeats on audio clips.
+    """
+    if not text or not text.strip():
+        return text
+
+    cleaned = text.strip()
+
+    # Step 1: Detect and collapse repeated phrases (lengths 15 down to 1)
+    # Handles both 'in the face of asteroid strikes. in the face of asteroid strikes.'
+    # and consecutive n-gram loops
+    words = cleaned.split()
+    if len(words) >= 4:
+        i = 0
+        while i < len(words):
+            found_repeat = False
+            max_len = min(15, (len(words) - i) // 2)
+            for L in range(max_len, 0, -1):
+                phrase = [re.sub(r'[^\w]', '', w.lower()) for w in words[i:i+L]]
+                if not any(phrase):
+                    continue
+                count = 1
+                j = i + L
+                while j + L <= len(words):
+                    next_phrase = [re.sub(r'[^\w]', '', w.lower()) for w in words[j:j+L]]
+                    if next_phrase == phrase:
+                        count += 1
+                        j += L
+                    else:
+                        break
+                # If a phrase repeats 2 or more times (or single word repeats 3+ times)
+                if (count >= 2 and L >= 2) or (count >= 3 and L == 1):
+                    words = words[:i+L] + words[j:]
+                    found_repeat = True
+                    break
+            if not found_repeat:
+                i += 1
+        cleaned = ' '.join(words)
+
+    # Step 2: Handle trailing single-word repetition (e.g. 'Strykes. Strykes. Strykes.')
+    cleaned = re.sub(r'\b([\w\'-]+)(?:[.,!?;:]?\s+\1)+\b[.,!?;:]?', r'\1.', cleaned, flags=re.IGNORECASE)
+
+    # Step 3: Clean up trailing word stutter if the last word is phonetically/spelling close
+    # to the word right before the last period (e.g. 'asteroid strikes. Strykes.')
+    trailing_word_match = re.search(r'\b([A-Za-z]+)\.\s+([A-Za-z]+)\.?$', cleaned)
+    if trailing_word_match:
+        w1, w2 = trailing_word_match.group(1).lower(), trailing_word_match.group(2).lower()
+        if w1 in w2 or w2 in w1 or (len(w1) >= 4 and len(set(w1) & set(w2)) / max(len(w1), len(w2)) > 0.65):
+            cleaned = cleaned[:trailing_word_match.start(1)] + trailing_word_match.group(1) + '.'
+
+    # Step 4: Runaway low-entropy loop detection (e.g. 'it it it a region utterly it a region utterly...')
+    # Scans for where vocabulary diversity over a 20-word window collapses under 0.35
+    tokens = cleaned.split()
+    if len(tokens) >= 20:
+        window_size = 20
+        first_loop_idx = None
+        for idx in range(len(tokens) - window_size + 1):
+            window = [re.sub(r'[^\w]', '', w.lower()) for w in tokens[idx:idx+window_size]]
+            window = [w for w in window if w]
+            if len(window) >= 15:
+                unique_ratio = len(set(window)) / len(window)
+                if unique_ratio < 0.35:
+                    first_loop_idx = idx
+                    break
+
+        if first_loop_idx is not None and first_loop_idx >= 5:
+            # If the token at first_loop_idx itself ends a sentence, include it!
+            if tokens[first_loop_idx].endswith(('.', '!', '?', ':')):
+                best_cut = first_loop_idx + 1
+            else:
+                best_cut = first_loop_idx
+                for k in range(first_loop_idx, max(0, first_loop_idx - 15), -1):
+                    if tokens[k-1].endswith(('.', '!', '?', ':')):
+                        best_cut = k
+                        break
+            tokens = tokens[:best_cut]
+            cleaned = ' '.join(tokens).strip()
+
+    # Normalize punctuation and spacing
+    cleaned = re.sub(r'\s+([.,!?;:])', r'\1', cleaned)
+    cleaned = re.sub(r'([.,!?;:])\1+', r'\1', cleaned)
+    cleaned = re.sub(r'\s{2,}', ' ', cleaned)
+    if cleaned and not cleaned.endswith(('.', '!', '?', '\"', '\'')):
+        cleaned += '.'
+
+    return cleaned.strip()
+
+
+def _transcribe_with_faster_whisper(whisper: Any, output_mp3: str) -> List[str]:
+    """Transcribes audio with anti-hallucination, VAD filtering, and repetition penalties."""
+    transcribe_kwargs: Dict[str, Any] = {
+        "beam_size": 5,
+        "condition_on_previous_text": False,
+        "vad_filter": True,
+        "vad_parameters": dict(min_silence_duration_ms=500, speech_pad_ms=400),
+        "repetition_penalty": 1.2,
+        "no_repeat_ngram_size": 3,
+        "compression_ratio_threshold": 2.4,
+        "temperature": [0.0, 0.2, 0.4],
+    }
+
+    try:
+        segments, _ = whisper.transcribe(output_mp3, **transcribe_kwargs)
+        return [segment.text.strip() for segment in segments]
+    except TypeError as te:
+        # If older faster-whisper doesn't support specific kwargs, filter to core supported ones
+        logger.warning(f"faster-whisper transcribe kwargs fallback due to TypeError: {te}")
+        safe_kwargs: Dict[str, Any] = {
+            "beam_size": 5,
+            "condition_on_previous_text": False,
+            "vad_filter": True,
+        }
+        try:
+            segments, _ = whisper.transcribe(output_mp3, **safe_kwargs)
+            return [segment.text.strip() for segment in segments]
+        except TypeError:
+            segments, _ = whisper.transcribe(output_mp3, beam_size=5)
+            return [segment.text.strip() for segment in segments]
+
+
 def _transcribe_snippet_audio(output_mp3: str) -> Tuple[str, str]:
     try:
         whisper = get_whisper_model()
         logger.info(f"Transcribing {output_mp3} with faster-whisper ({WHISPER_MODEL_NAME})...")
-        segments, _ = whisper.transcribe(output_mp3, beam_size=5)
-        text_segments = [segment.text.strip() for segment in segments]
-        transcript_body = " ".join(text_segments).strip()
-        logger.info(f"Transcription complete: {len(transcript_body)} characters")
+        text_segments = _transcribe_with_faster_whisper(whisper, output_mp3)
+        raw_transcript = " ".join(text_segments).strip()
+        transcript_body = clean_hallucinated_repetitions(raw_transcript)
+        if len(transcript_body) < len(raw_transcript):
+            logger.info(f"Transcription complete: {len(transcript_body)} characters (cleaned repetitions from {len(raw_transcript)} chars)")
+        else:
+            logger.info(f"Transcription complete: {len(transcript_body)} characters")
         return transcript_body, "faster-whisper"
     except Exception as whisper_err:
         logger.exception(f"faster-whisper transcription failed ({whisper_err}). Attempting Vosk backup...")
         try:
-            transcript_body = transcribe_with_vosk(output_mp3)
+            raw_body = transcribe_with_vosk(output_mp3)
+            transcript_body = clean_hallucinated_repetitions(raw_body)
             logger.info(f"Vosk backup transcription complete: {len(transcript_body)} characters")
             return transcript_body, "vosk"
         except Exception as vosk_err:
@@ -3411,7 +3600,7 @@ def process_bookmark_extraction(
     safe_book_title = sanitize_filename(book_title)
     safe_username = sanitize_filename(user["username"])
     real_output_dir, target_user_name, output_mp3, _, output_json = _prepare_snippet_output_paths(
-        safe_username, safe_book_title, timestamp, replace_timestamp
+        safe_username, safe_book_title, timestamp, replace_timestamp, current_time=current_time
     )
 
     audio_error = _extract_snippet_audio(
@@ -3748,6 +3937,16 @@ def _sync_single_bookmark(
     b_time = bm["time"]
     b_title = bm["title"] or f"Bookmark @ {format_bookmarked_duration(b_time)}"
 
+    created_at_raw = bm.get("createdAt") or bm.get("created_at")
+    bm_timestamp = None
+    if created_at_raw:
+        try:
+            c_float = float(created_at_raw)
+            dt_obj = datetime.fromtimestamp(c_float / 1000.0) if c_float > 1e11 else datetime.fromtimestamp(c_float)
+            bm_timestamp = dt_obj.strftime("%Y%m%d_%H%M%S")
+        except Exception:
+            pass
+
     try:
         process_bookmark_extraction(
             library_item_id=lib_id,
@@ -3756,7 +3955,8 @@ def _sync_single_bookmark(
             server_url=target_server,
             duration=INTERCEPT_SNIPPET_DURATION,
             custom_pre_roll=INTERCEPT_PRE_ROLL,
-            is_intercepted=True
+            is_intercepted=True,
+            replace_timestamp=bm_timestamp
         )
         logger.info(f"[Auto-Sync] [✓] Successfully extracted '{b_title}'")
         return True
@@ -4192,7 +4392,7 @@ class AbsSocketIoListener:
         headers_dict = {
             "Authorization": f"Bearer {token}",
             "Origin": origin_host,
-            "User-Agent": "Audiobookshelf-Bookmarks-Manager/2.1.0",
+            "User-Agent": "Audiobookshelf-Bookmarks-Manager/2.2.1",
         }
 
         connected_at = 0.0
@@ -4533,17 +4733,54 @@ def _scan_book_directory_for_bookmarks(
     username: str,
     seen_ids: Set[str]
 ) -> List[Dict[str, Any]]:
-    results = []
+    raw_results = []
     try:
         entries = sorted(os.listdir(full_book_path), reverse=True)
     except OSError:
-        return results
+        return []
 
     for fname in entries:
         item = _process_bookmark_markdown_file(full_book_path, book_dir, fname, u, username, seen_ids)
         if item:
-            results.append(item)
-    return results
+            raw_results.append(item)
+
+    # Deduplicate snippets that belong to the exact same piece of audiobook (same anchor time)
+    # Prefer extended snippets (longer duration) or newer mtime/timestamp
+    deduped_results: List[Dict[str, Any]] = []
+    for candidate in raw_results:
+        cand_time = candidate.get("current_time", 0.0)
+        duplicate_idx = -1
+        for idx, existing in enumerate(deduped_results):
+            ext_time = existing.get("current_time", 0.0)
+            if abs(cand_time - ext_time) <= 15.0:
+                duplicate_idx = idx
+                break
+
+        if duplicate_idx >= 0:
+            existing_item = deduped_results[duplicate_idx]
+            cand_dur = candidate.get("duration", 0)
+            ext_dur = existing_item.get("duration", 0)
+
+            # Keep the longer snippet (extended) or newer one
+            if cand_dur > ext_dur or (cand_dur == ext_dur and candidate.get("timestamp", "") > existing_item.get("timestamp", "")):
+                obsolete_item = existing_item
+                deduped_results[duplicate_idx] = candidate
+            else:
+                obsolete_item = candidate
+
+            # Clean up the obsolete duplicate files from disk so only the extended snippet remains
+            obs_base = obsolete_item.get("timestamp")
+            if obs_base and obs_base != candidate.get("timestamp"):
+                for ext in ("mp3", "md", "json"):
+                    safe_remove_file_in_directory(full_book_path, f"{obs_base}.{ext}")
+                logger.info(
+                    f"Deduplicated snippets for '{book_dir}' at {cand_time}s: "
+                    f"cleaned up obsolete [{obs_base}] in favor of extended [{candidate.get('timestamp')}]"
+                )
+        else:
+            deduped_results.append(candidate)
+
+    return deduped_results
 
 
 def _scan_user_directory_bookmarks(
@@ -6179,7 +6416,7 @@ def health_check():
         "status": "healthy",
         "service": "Audiobookshelf Bookmarks Manager",
         "tagline": "Autonomous manager and sidecar for Audiobookshelf with real-time Socket.IO listener & automated bookmark clipping",
-        "version": "2.1.0",
+        "version": "2.2.1",
         "architecture_mode": "Zero-Proxy Event-Driven Sidecar (Port 13380)",
         "abs_target_server": ABS_TARGET_SERVER,
         "volume_dir": VOLUME_DIR,

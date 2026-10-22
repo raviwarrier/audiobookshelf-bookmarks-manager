@@ -7,6 +7,9 @@ node_modules/
 dist/
 build/
 coverage/
+.build_hash
+.deps_hash
+.requirements_hash
 
 # Databases & local data stores
 *.db

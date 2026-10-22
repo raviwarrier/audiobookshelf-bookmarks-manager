@@ -1022,7 +1022,7 @@ export function App() {
       <footer className="border-t border-neutral-900 px-6 py-4 text-center text-xs text-neutral-600 font-mono flex items-center justify-center gap-2">
         <span>Audiobookshelf Bookmarks Manager</span>
         <span>•</span>
-        <span className="text-neutral-500">v2.1.0</span>
+        <span className="text-neutral-500">v2.2.1</span>
       </footer>
     </div>
   );

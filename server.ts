@@ -469,7 +469,7 @@ function sanitizeProxyHeaders(rawHeaders?: any): Record<string, string> {
     }
   }
 
-  safeHeaders["User-Agent"] = safeHeaders["User-Agent"] || "Audiobookshelf-Bookmarks-Manager/2.1.0";
+  safeHeaders["User-Agent"] = safeHeaders["User-Agent"] || "Audiobookshelf-Bookmarks-Manager/2.2.1";
   safeHeaders["Accept"] = safeHeaders["Accept"] || "*/*";
   return safeHeaders;
 }

@@ -9,7 +9,8 @@ import {
   BookmarkPlus,
   User as UserIcon,
   Sliders,
-  Sparkles
+  Sparkles,
+  BookOpen
 } from 'lucide-react';
 import { AbsActiveSession, AbsUser, Snippet } from '../types';
 import { createAbsBookmark, formatAuthors, getPlayableAudioUrl } from '../lib/absClient';
@@ -447,6 +448,100 @@ const CaptureSessionNotice: React.FC<CaptureSessionNoticeProps> = ({
   );
 };
 
+interface CaptureIdleSessionCardProps {
+  username?: string;
+  serverUrl: string;
+  onRefreshSession: () => Promise<void>;
+  onNavigateToLibrary: () => void;
+  onUseMockSession?: () => void;
+  isLoadingSession: boolean;
+}
+
+const CaptureIdleSessionCard: React.FC<CaptureIdleSessionCardProps> = ({
+  username,
+  serverUrl,
+  onRefreshSession,
+  onNavigateToLibrary,
+  onUseMockSession,
+  isLoadingSession,
+}) => {
+  return (
+    <section className="border border-neutral-700 bg-[#0c0c0c] p-6 space-y-5">
+      <div className="flex items-start gap-4">
+        <div className="w-10 h-10 rounded-full bg-emerald-500/15 border border-emerald-500/40 text-emerald-400 flex items-center justify-center shrink-0 mt-0.5">
+          <CheckCircle2 className="w-5 h-5" />
+        </div>
+        <div className="space-y-1">
+          <h2 className="text-sm font-semibold text-white flex items-center gap-2">
+            <span>Audiobookshelf Connected & Ready</span>
+            <span className="text-[11px] px-2 py-0.5 rounded bg-emerald-950/80 border border-emerald-700 text-emerald-300 font-normal">
+              Auth Active
+            </span>
+          </h2>
+          <p className="text-xs text-neutral-400 leading-relaxed">
+            Authenticated as <span className="text-neutral-200 font-semibold">@{username || 'user'}</span> on{' '}
+            <span className="text-neutral-200 font-semibold">{serverUrl}</span>.
+          </p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+        <div className="p-3.5 bg-[#141414] border border-neutral-800 space-y-1.5">
+          <div className="font-semibold text-emerald-300 flex items-center gap-2">
+            <Radio className="w-3.5 h-3.5 text-emerald-400" />
+            <span>Automatic Mobile & Web Capture</span>
+          </div>
+          <p className="text-neutral-400 leading-relaxed">
+            The sidecar background listener is active. Whenever you press <strong>Bookmark</strong> in your Audiobookshelf mobile app or web player, the audio is automatically captured and transcribed into your <strong>Library</strong>.
+          </p>
+        </div>
+
+        <div className="p-3.5 bg-[#141414] border border-neutral-800 space-y-1.5">
+          <div className="font-semibold text-neutral-200 flex items-center gap-2">
+            <Play className="w-3.5 h-3.5 text-cyan-400" />
+            <span>Live Stream Player (Idle)</span>
+          </div>
+          <p className="text-neutral-400 leading-relaxed">
+            No audio stream is actively playing in Audiobookshelf right now. Play an audiobook in your Audiobookshelf app to enable manual live audio slicing and waveform controls here.
+          </p>
+        </div>
+      </div>
+
+      <div className="pt-2 flex flex-wrap items-center gap-3">
+        <button
+          type="button"
+          onClick={onNavigateToLibrary}
+          className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs flex items-center gap-2 transition-colors cursor-pointer"
+        >
+          <BookOpen className="w-3.5 h-3.5" />
+          <span>View Bookmarks Library</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={onRefreshSession}
+          disabled={isLoadingSession}
+          className="px-3.5 py-2 bg-[#181818] border border-neutral-700 hover:border-neutral-500 text-neutral-200 hover:text-white text-xs flex items-center gap-2 transition-colors disabled:opacity-50 cursor-pointer"
+        >
+          <RotateCw className={`w-3.5 h-3.5 ${isLoadingSession ? 'animate-spin' : ''}`} />
+          <span>{isLoadingSession ? 'Checking...' : 'Check Playback Again'}</span>
+        </button>
+
+        {onUseMockSession && (
+          <button
+            type="button"
+            onClick={onUseMockSession}
+            className="px-3 py-2 bg-transparent text-neutral-400 hover:text-neutral-200 text-xs flex items-center gap-1.5 transition-colors cursor-pointer underline decoration-dotted"
+          >
+            <Sparkles className="w-3 h-3 text-amber-400" />
+            <span>Try Demo Waveform Preview</span>
+          </button>
+        )}
+      </div>
+    </section>
+  );
+};
+
 interface ActiveSessionParametersPanelProps {
   session: AbsActiveSession;
   duration: number;
@@ -736,14 +831,7 @@ export const CaptureView: React.FC<CaptureViewProps> = ({
         </div>
       )}
 
-      <CaptureSessionNotice
-        sessionError={sessionError}
-        serverUrl={serverUrl}
-        username={user?.username}
-        onRefreshSession={onRefreshSession}
-      />
-
-      {session && (
+      {session ? (
         <ActiveSessionParametersPanel
           session={session}
           duration={duration}
@@ -759,6 +847,22 @@ export const CaptureView: React.FC<CaptureViewProps> = ({
           isSavingAbsBookmark={isSavingAbsBookmark}
           onExtract={handleCreateSnippet}
           onSaveAbsBookmark={handleSaveAbsBookmark}
+        />
+      ) : user ? (
+        <CaptureIdleSessionCard
+          username={user.username}
+          serverUrl={serverUrl}
+          onRefreshSession={onRefreshSession}
+          onNavigateToLibrary={onNavigateToLibrary}
+          onUseMockSession={onUseMockSession}
+          isLoadingSession={isLoadingSession}
+        />
+      ) : (
+        <CaptureSessionNotice
+          sessionError={sessionError}
+          serverUrl={serverUrl}
+          username={user?.username}
+          onRefreshSession={onRefreshSession}
         />
       )}
 

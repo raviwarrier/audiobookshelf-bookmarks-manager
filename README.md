@@ -1,6 +1,6 @@
 # Audiobookshelf Bookmarks Manager
 
-**Version 2.1.0 (Event-Driven Architecture)**  
+**Version 2.2.1 (Anti-Hallucination & Deduplication Release)**  
 Autonomous bookmark audio clipper, Whisper speech-to-text transcriber, and web dashboard for [Audiobookshelf](https://www.audiobookshelf.org/).
 
 GitHub: [https://github.com/raviwarrier/audiobookshelf-bookmarks-manager](https://github.com/raviwarrier/audiobookshelf-bookmarks-manager)
@@ -19,9 +19,10 @@ GitHub: [https://github.com/raviwarrier/audiobookshelf-bookmarks-manager](https:
 - 🔄 **Non-Blocking Background Sync**: Background sync cycles run concurrently without holding open HTTP requests or causing proxy timeouts. Real-time progress updates are reported directly to the UI.
 - 📁 **Resilient Audio Extraction**: Slices audio locally from `.m4b`/`.mp3` files via `ffmpeg` with `PATH_MAPPINGS` support and multi-track offset resolution. If a local file is unmounted or moved, it seamlessly falls back to streaming and extracting audio directly from the Audiobookshelf server over HTTP.
 - 🔁 **One-Click Snippet Retry**: If audio extraction previously failed due to network hiccups or unmounted drives, retry snipping and transcription with a single click right from the snippet card.
-- ⏱️ **Adjust & Re-Clip Context**: Expand pre-roll or total duration on any snippet directly in the UI to capture surrounding discussion while preserving original bookmark anchors.
+- ⏱️ **Adjust, Extend & Clean Replacement**: Expand pre-roll or total duration on any snippet directly in the UI. Automatically cleans up earlier shorter snippets and deduplicates existing clips on disk matching the same audio moment.
 - 📅 **Configurable Cutoff Dates**: Exclude historical bookmarks prior to installation or customize the cutoff date (from installation, from server beginning, or a custom `YYYY/MM/DD` date).
-- 🎙️ **Resource-Optimized AI Transcription**: Powered by `faster-whisper` with bounded CPU threads (`WHISPER_THREADS`) and low process priority (`os.nice(15)`), keeping Raspberry Pi and home servers snappy.
+- 🎙️ **Anti-Hallucination AI Transcription**: Powered by `faster-whisper` with Silero Voice Activity Detection (VAD) to trim trailing silence, unconditioned decoding (`condition_on_previous_text=False`), repetition penalty, and four-tier post-processing suppression of loop artifacts (preventing trailing stutters and repeated words).
+- 🚀 **Zero-Disruption Fast Updates**: Incremental build hashing (`.build_hash`) avoids redundant npm builds or dependency reinstalls on Raspberry Pi. Host compilation runs throttled at `nice -n 19`, preventing CPU starvation or transient 502 Bad Gateway timeouts on co-located Audiobookshelf instances.
 - 📚 **Book Filtering & Unique Book Counts**: Filter snippets by typing book titles or selecting from the dropdown. The "All Books" button dynamically displays the count of unique books in your library.
 - 📦 **Per-Book Bulk Export**: Download all bookmarks for any audiobook as a complete **ZIP package** (all audio MP3s + individual MD notes) or a **consolidated Markdown digest** ready for Obsidian, Logseq, or Notion.
 - 🔒 **Zero-Disk Ephemeral Security**: Client credentials and API tokens are kept in memory using ephemeral AES-256 session encryption and are never written to disk, cookies, or browser databases.

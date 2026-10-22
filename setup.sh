@@ -286,23 +286,34 @@ if command -v npm &>/dev/null; then
     fi
 
     # Check if frontend / server source code changed
-    BUILD_HASH_FILE="$SCRIPT_DIR/dist/.build_hash"
+    BUILD_HASH_FILE="$SCRIPT_DIR/.build_hash"
+    ALT_BUILD_HASH_FILE="$SCRIPT_DIR/dist/.build_hash"
     CURRENT_BUILD_HASH=""
     if command -v sha256sum &>/dev/null; then
         CURRENT_BUILD_HASH=$(find src server.ts index.html package.json vite.config.ts tsconfig.json -type f 2>/dev/null -exec sha256sum {} + | sort | sha256sum | awk '{print $1}')
     fi
 
-    if [[ -f "$BUILD_HASH_FILE" && -f "$SCRIPT_DIR/dist/server.js" && -f "$SCRIPT_DIR/dist/index.html" && -n "$CURRENT_BUILD_HASH" && "$(cat "$BUILD_HASH_FILE" 2>/dev/null)" == "$CURRENT_BUILD_HASH" ]]; then
+    SAVED_HASH=""
+    if [[ -f "$BUILD_HASH_FILE" ]]; then
+        SAVED_HASH=$(cat "$BUILD_HASH_FILE" 2>/dev/null)
+    elif [[ -f "$ALT_BUILD_HASH_FILE" ]]; then
+        SAVED_HASH=$(cat "$ALT_BUILD_HASH_FILE" 2>/dev/null)
+    fi
+
+    if [[ -f "$SCRIPT_DIR/dist/server.js" && -f "$SCRIPT_DIR/dist/index.html" && -n "$CURRENT_BUILD_HASH" && "$SAVED_HASH" == "$CURRENT_BUILD_HASH" ]]; then
         echo -e "   ${GREEN}✓ Web dashboard & server bundle are up to date (no code changes detected). Skipping build.${NC}"
     else
         echo -e "\n${BLUE}[*] Code changes detected. Building web dashboard and server...${NC}"
         if command -v nice &>/dev/null; then
-            nice -n 10 npm run build
+            nice -n 19 npm run build
         else
             npm run build
         fi
         mkdir -p "$SCRIPT_DIR/dist"
-        [[ -n "$CURRENT_BUILD_HASH" ]] && echo "$CURRENT_BUILD_HASH" > "$BUILD_HASH_FILE"
+        if [[ -n "$CURRENT_BUILD_HASH" ]]; then
+            echo "$CURRENT_BUILD_HASH" > "$BUILD_HASH_FILE"
+            echo "$CURRENT_BUILD_HASH" > "$ALT_BUILD_HASH_FILE"
+        fi
         echo -e "   ${GREEN}✓ Web dashboard and server compiled to dist/server.js.${NC}"
     fi
 fi

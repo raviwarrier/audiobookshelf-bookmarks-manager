@@ -1803,34 +1803,31 @@ This document tracks all security, reliability, and maintainability fixes applie
     - Wrapped host-intensive tasks (`npm run build` and `pip install`) with `nice -n 10` scheduling priority on Linux systems to prevent temporary CPU starvation of co-located services (such as the Audiobookshelf Docker container and reverse proxy).
     - Prevents transient 502 Bad Gateway timeouts on reverse proxy health checks during local compilation.
 
-124. **Incremental Build & Change Detection Caching (`setup.sh`, `update.sh`)**
-    - Implemented SHA-256 content checksum caching for frontend/server code (`src/`, `server.ts`, `index.html`, etc.), Node dependencies (`package.json`, `package-lock.json`), and Python dependencies (`requirements.txt`).
-    - Skips `npm run build`, `npm install`, and `pip install` when their corresponding source files are unchanged.
-    - Eliminates redundant ~45-second 100% CPU spikes during updates when only backend scripts or documentation are modified, drastically speeding up updates on Raspberry Pi and avoiding host resource contention.
+125. **Persistent Build Caching, Fast Update Pipeline & Idle Session Guidance**
+    - **Persistent Checksums**: Configured `.build_hash`, `.deps_hash`, and `.requirements_hash` in `.gitignore` and updated `update.sh` / `setup.sh` to check both root and `dist/` locations. Ensures incremental build detection persists across `git reset --hard origin/main`.
+    - **Ultra-Fast Updates**: Removed redundant `apt-get update` and package checks from `update.sh`. `update.sh` now completes in ~1-2 seconds on Raspberry Pi when code is unchanged.
+    - **Resource Throttling**: Configured `nice -n 19` for compilation and build tasks to ensure Audiobookshelf and reverse proxy processes receive full CPU priority, eliminating transient 502 Bad Gateway timeouts.
+    - **Clear Idle Session Guidance (`CaptureView.tsx`)**: Replaced the alarming "empty listening session" error notice with `CaptureIdleSessionCard`. Authenticated users now see confirmation of active connection and username (`@ravi`), clear explanation that the real-time background bookmark listener is active, and direct navigation to the Bookmarks Library where extracted audio snippets appear.
 
+126. **Whisper Anti-Hallucination & Snippet Extension Deduplication (`main.py`)**
+    - **Whisper Anti-Hallucination & Repetition Prevention**:
+      - Disabled previous text conditioning (`condition_on_previous_text=False`) in `_transcribe_with_faster_whisper` to prevent hallucinated audio artifacts from propagating and poisoning subsequent 30s transcription windows.
+      - Enabled Silero Voice Activity Detection (`vad_filter=True`, `min_silence_duration_ms=500`, `speech_pad_ms=400`) to automatically clip trailing silence and low-energy background noise before Whisper decoding.
+      - Tuned decoding parameters: `repetition_penalty=1.2`, `no_repeat_ngram_size=3`, `compression_ratio_threshold=2.4`, with temperature fallback ladder `[0.0, 0.2, 0.4]`.
+      - Implemented four-tier deterministic post-processing cleaner `clean_hallucinated_repetitions`:
+        - Collapses consecutive multi-word phrase loops (phrase lengths 15 down to 1).
+        - Collapses single-word repeats with punctuation (`Strykes. Strykes. Strykes.` -> `Strykes.`).
+        - Cleans up trailing word stutter matching preceding sentence endpoints (`in the face of asteroid strikes. Strykes.` -> `in the face of asteroid strikes.`).
+        - Detects low-entropy runaway loops (< 0.35 unique word ratio over a 20-word window) and cleanly snaps backwards to the nearest legitimate sentence boundary.
+    - **Snippet Extension & Prior File Replacement**:
+      - Implemented `_remove_prior_bookmark_snippets`: scans the book directory and removes prior `.mp3`, `.md`, and `.json` files when extending an existing clip, both by target filename (`replace_timestamp`) and by matching bookmark anchor time (`current_time` within a 15-second fuzzy window).
+      - Standardized bookmark timestamps in `_sync_single_bookmark` using `createdAt` epoch strings to ensure auto-sync and manual/fallback timestamps stay synchronized.
+      - Added library scanning deduplication in `_scan_book_directory_for_bookmarks`: groups bookmarks within a 15-second anchor time window, retains the longest/extended snippet, and automatically purges obsolete duplicate files from disk.
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+127. **Superfluous Dependency Pruning & Attack Surface Reduction (`package.json`, `package-lock.json`, `bun.lock`)**
+    - Audited package manifests and lockfiles to eliminate dead dependencies and unnecessary third-party packages:
+      - Removed `@google/genai`: Unused scaffold package; transcription and speech-to-text operate entirely on-premise using `faster-whisper` and `vosk` with zero external LLM API calls.
+      - Removed `motion`: Unused frontend animation library.
+      - Removed `autoprefixer`: Superfluous in Tailwind CSS v4, which processes prefixes natively via `@tailwindcss/vite`.
+      - Removed duplicate `vite` declaration from runtime `dependencies` (consolidated into `devDependencies`).
+    - Regenerated `package-lock.json` and `bun.lock`, reducing dependency footprint, disk consumption on Raspberry Pi, and supply chain vulnerability surface.
